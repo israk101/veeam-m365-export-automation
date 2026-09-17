@@ -1,0 +1,34 @@
+{
+  "RunTimestamp": "20260917_115627",
+  "Organization": "israk.onmicrosoft.com",
+  "JobName": "VB365-LAB-M365-Backup",
+  "BackupExecuted": true,
+  "BackupStatus": "Success",
+  "RestorePointDate": "09/17/2026 09:21:22",
+  "Exchange": {
+    "Status": "SUCCESS",
+    "SourceMailbox": "israksarker@israk.onmicrosoft.com",
+    "Subject": "Your Microsoft 365 Business Standard subscription no longer has recurring billing",
+    "LocalFile": "C:\\VeeamRestoreLocalTest\\20260917_115627\\Exchange\\Your Microsoft 365 Business Standard subscription no longer has recurring billing.msg",
+    "SizeBytes": 228352,
+    "SHA256": "CA221140B3D72A35AE921C8FA00BBABB0C7A2B03F194BF7B64F0FF424C234B24"
+  },
+  "OneDrive": {
+    "Status": "SUCCESS",
+    "SourceUser": "source01",
+    "FileName": "OneDrive-Test-003.pdf.pdf",
+    "LocalFile": "C:\\VeeamRestoreLocalTest\\20260917_115627\\OneDrive\\OneDrive-Test-003.pdf (ver.2.0).pdf",
+    "SizeBytes": 104070,
+    "SHA256": "DA8E797BB9302A1091CC8B889B9B96922C4AAA305463245BCBF7ED566F69866D"
+  },
+  "SharePoint": {
+    "Status": "SUCCESS",
+    "Site": "SourceData",
+    "Library": "Documents",
+    "FileName": "OneDrive-Test-002.docx.docx",
+    "LocalFile": "C:\\VeeamRestoreLocalTest\\20260917_115627\\SharePoint\\OneDrive-Test-002.docx.docx",
+    "SizeBytes": 29157,
+    "SHA256": "BF2EAFC0A150F6105635E2BCB3A154D5D312468966F97247474D388F5F5A1AA7"
+  },
+  "AllSuccessful": true
+}

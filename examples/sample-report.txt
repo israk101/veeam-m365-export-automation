@@ -1,0 +1,40 @@
+======================================================================
+     REPORT CONCLUSIVO: TEST BACKUP & RESTORE LOCALE VEEAM M365
+======================================================================
+Data/Ora Run        : 17/09/2026 11:56:50
+Organizzazione      : israk.onmicrosoft.com
+Job di Backup       : VB365-LAB-M365-Backup
+Esito Backup        : Success
+Restore Point Usato : 09/17/2026 09:21:22
+Cartella Locale     : C:\VeeamRestoreLocalTest\20260917_115627
+
+----------------------------------------------------------------------
+DETTAGLIO RESTORE CAMPIONI (COPIA SU PUNTO LOCALE MACCHINA VEEAM):
+----------------------------------------------------------------------
+[1] EXCHANGE ONLINE (EMAIL)
+    - Esito       : SUCCESSO
+    - Casella     : israksarker@israk.onmicrosoft.com
+    - Oggetto     : Your Microsoft 365 Business Standard subscription no longer has recurring billing
+    - File Locale : C:\VeeamRestoreLocalTest\20260917_115627\Exchange\Your Microsoft 365 Business Standard subscription no longer has recurring billing.msg
+    - Dimensione  : 228352 bytes
+    - Checksum    : CA221140B3D72A35AE921C8FA00BBABB0C7A2B03F194BF7B64F0FF424C234B24
+
+[2] ONEDRIVE FOR BUSINESS (FILE)
+    - Esito       : SUCCESSO
+    - Utente      : source01
+    - File        : OneDrive-Test-003.pdf.pdf
+    - File Locale : C:\VeeamRestoreLocalTest\20260917_115627\OneDrive\OneDrive-Test-003.pdf (ver.2.0).pdf
+    - Dimensione  : 104070 bytes
+    - Checksum    : DA8E797BB9302A1091CC8B889B9B96922C4AAA305463245BCBF7ED566F69866D
+
+[3] SHAREPOINT ONLINE (DOCUMENTO)
+    - Esito       : SUCCESSO
+    - Sito / Lib  : SourceData / Documents
+    - Documento   : OneDrive-Test-002.docx.docx
+    - File Locale : C:\VeeamRestoreLocalTest\20260917_115627\SharePoint\OneDrive-Test-002.docx.docx
+    - Dimensione  : 29157 bytes
+    - Checksum    : BF2EAFC0A150F6105635E2BCB3A154D5D312468966F97247474D388F5F5A1AA7
+
+======================================================================
+ESITO COMPLESSIVO OPERAZIONE: TUTTO ANDATO A BUON FINE (SUCCESS)
+======================================================================
