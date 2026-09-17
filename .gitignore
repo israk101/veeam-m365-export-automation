@@ -1,0 +1,24 @@
+# Veeam Restore Artifacts & Test Dumps
+/output/
+/RestoreTestEvidence/
+/VeeamRestoreLocalTest/
+*.msg
+*.pst
+*.pdf
+*.docx
+*.xlsx
+*.zip
+
+# Execution Logs & Reports generated during runtime
+*.log
+Report_Summary.txt
+Report_Summary.json
+
+# Temporary files & OS metadata
+*.tmp
+.DS_Store
+Thumbs.db
+
+# IDE & Editor configurations
+.vscode/
+.idea/
