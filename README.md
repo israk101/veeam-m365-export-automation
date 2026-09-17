@@ -6,10 +6,11 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-7.0%2B-blue?logo=powershell&logoColor=white)](https://microsoft.com/powershell)
 [![Veeam](https://img.shields.io/badge/Veeam%20VB365-v8.x%20%2F%20v8.6-00B336?logo=veeam&logoColor=white)](https://www.veeam.com)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20Server-0078D4?logo=windows&logoColor=white)](https://microsoft.com)
+[![Desktop App](https://img.shields.io/badge/Desktop%20App-VeeamM365RestoreTester.exe-0078D4?logo=windows&logoColor=white)](#-option-a-standalone-windows-gui-veeamm365restoretesterexe)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](#)
 [![License](https://img.shields.io/badge/License-MIT-purple)](#)
 
-*A deterministic, non-destructive PowerShell automation engine designed to validate Veeam Backup for Microsoft 365 (VB365) restore points by extracting random real-world samples directly to secure local storage with cryptographic integrity validation.*
+*A deterministic, non-destructive automation engine & standalone desktop application designed to validate Veeam Backup for Microsoft 365 (VB365) restore points by extracting random real-world samples directly to secure local storage with cryptographic integrity validation.*
 
 ---
 
@@ -37,7 +38,8 @@
   - [Audit Trail & Evidence Structure](#audit-trail--evidence-structure)
 - [🚀 3. How-to-Use Manual](#-3-how-to-use-manual)
   - [Prerequisites](#prerequisites)
-  - [Quick Start](#quick-start)
+  - [Option A: Standalone Windows GUI (`VeeamM365RestoreTester.exe`)](#-option-a-standalone-windows-gui-veeamm365restoretesterexe)
+  - [Option B: PowerShell CLI (`Invoke-SimpleM365BackupRestoreTest.ps1`)](#-option-b-powershell-cli-invoke-simplem365backuprestoretestps1)
   - [CLI Parameter Reference](#cli-parameter-reference)
   - [Usage Scenarios](#usage-scenarios)
 - [📊 4. Sample Output](#-4-sample-output)
@@ -62,9 +64,9 @@ This manual procedure is:
 This automation takes a radically safe approach:
 
 > [!IMPORTANT]
-> **Zero Cloud Alteration:** The script never writes, alters, or touches active cloud production data in Microsoft 365. 
+> **Zero Cloud Alteration:** Neither the PowerShell engine nor the standalone GUI application ever write, alter, or touch active cloud production data in Microsoft 365. 
 > 
-> Instead, it extracts one random sample per workload (Exchange, OneDrive, SharePoint) directly from the backup repository and saves it onto a controlled directory on the local Veeam server disk.
+> Instead, they extract one random sample per workload (Exchange, OneDrive, SharePoint) directly from the backup repository and save it onto a controlled directory on the local Veeam server disk.
 
 By verifying the extracted files locally through cryptographic hashes (`SHA-256`) and filesystem checks, you receive mathematical, auditable proof that the backup database is healthy, the Veeam Explorers can unpack items, and the files are 100% usable.
 
@@ -72,6 +74,7 @@ By verifying the extracted files locally through cryptographic hashes (`SHA-256`
 | Feature | Benefit |
 | :--- | :--- |
 | 🛡️ **100% Non-Destructive** | Restores occur out-of-place directly to server disk. Zero production risk. |
+| 🖥️ **Standalone Desktop GUI** | Includes **`VeeamM365RestoreTester.exe`** with real-time log streaming, metrics dashboard, and report history browser. |
 | 🎲 **Uniform Random Sampling** | Dynamically samples real user items, preventing biased or hardcoded checks. |
 | ⚡ **2-Phase Streamlined Execution** | Automates both backup completion and multi-workload extraction in one step. |
 | 🔒 **Cryptographic Proof** | Calculates SHA-256 checksums and validates file sizes for hard evidence. |
@@ -87,8 +90,15 @@ By verifying the extracted files locally through cryptographic hashes (`SHA-256`
 
 ```mermaid
 flowchart TD
+    subgraph FRONTEND["Frontend Interfaces"]
+        GUI["Windows GUI Desktop App\n(VeeamM365RestoreTester.exe)"]
+        CLI["PowerShell CLI / Console\n(Invoke-SimpleM365BackupRestoreTest.ps1)"]
+    end
+
     subgraph PHASE_1["PHASE 1: Tenant Validation & Connection"]
-        A["CLI Arguments / Interactive Input"] --> B["Connect-VBOServer (localhost)"]
+        GUI -- "Invokes pwsh.exe with params" --> A["CLI Arguments / Interactive Input"]
+        CLI --> A
+        A --> B["Connect-VBOServer (localhost)"]
         B --> C["Get-VBOOrganization (Validate Tenant)"]
         C --> D["Get-VBOJob (Validate Job State)"]
     end
@@ -111,6 +121,7 @@ flowchart TD
         J --> K["Generate Summary Report (Console / TXT / JSON)"]
     end
 
+    style FRONTEND fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#fff
     style PHASE_1 fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#fff
     style PHASE_2 fill:#022c22,stroke:#34d399,stroke-width:2px,color:#fff
 ```
@@ -208,14 +219,36 @@ C:\VeeamRestoreLocalTest\
 ## 🚀 3. How-to-Use Manual
 
 ### Prerequisites
-- **Operating System:** Windows Server 2016 / 2019 / 2022 / 2025.
-- **PowerShell:** PowerShell 7.0 or higher.
+- **Operating System:** Windows Server 2016 / 2019 / 2022 / 2025 (or Windows 10 / 11 host with VB365 PowerShell access).
+- **PowerShell:** PowerShell 7.0 or higher (`pwsh.exe`).
 - **Product:** Veeam Backup for Microsoft 365 (v8.x or v8.6+).
-- **Execution Rights:** Local Administrator with access to the Veeam PowerShell console.
+- **Execution Rights:** Local Administrator (the GUI & script require elevated permissions to run Veeam cmdlets).
 
 ---
 
-### Quick Start
+### 🖥️ Option A: Standalone Windows GUI (`VeeamM365RestoreTester.exe`)
+
+For a modern visual desktop interface, use **`VeeamM365RestoreTester.exe`**. It packages the PowerShell automation into a standalone executable with live log streaming, metrics dashboard, and report history browser.
+
+<div align="center">
+  <img src="examples/VeeamM365RestoreTester-preview.png" alt="Veeam M365 Restore Tester GUI Preview" width="800"/>
+</div>
+
+#### Key Features of the GUI:
+- 📊 **Dashboard:** Real-time summary cards displaying status for Exchange, OneDrive, and SharePoint restores.
+- ⚡ **Live Log Terminal:** Embedded color-coded PowerShell output streaming in real-time.
+- 📁 **Report Browser:** Browse, search, and inspect past `Report_Summary.json` execution files.
+- ⚙️ **Persistent Settings:** Save tenant details, backup job names, local restore directories, and script execution flags.
+
+#### How to Run the GUI:
+1. Locate **`VeeamM365RestoreTester.exe`** in the repository folder.
+2. Right-click and select **Run as Administrator** (or approve the UAC prompt).
+3. Go to **Settings** or the **Run test** tab and enter your **Organization Name** and **Job Name**.
+4. Click **Run test**. Keep the app open while the live terminal streams PowerShell output and updates the dashboard.
+
+---
+
+### 📜 Option B: PowerShell CLI (`Invoke-SimpleM365BackupRestoreTest.ps1`)
 
 1. Open **Veeam Backup for Microsoft 365 PowerShell** as **Administrator**.
 2. Navigate to the repository directory:
