@@ -70,3 +70,14 @@ def human_size(value: Any) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return "—"
+
+
+def format_duration(value: Any) -> str:
+    """Format a duration in seconds as HH:MM:SS."""
+    try:
+        total_seconds = max(0, int(round(float(value))))
+    except (TypeError, ValueError):
+        return "—"
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"

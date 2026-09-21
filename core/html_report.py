@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.batch_report import normalize_status, overall_status
 from core.paths import resource_path
 from core.reports import human_size
 
@@ -106,7 +107,8 @@ def render_html_report(summary: dict[str, Any]) -> str:
     orgs_tested = summary.get("OrganizationsTested") or ([org] if org else [])
     orgs_display = ", ".join(orgs_tested) if orgs_tested else org
 
-    all_successful = bool(summary.get("AllSuccessful"))
+    aggregate_status = overall_status(summary)
+    all_successful = aggregate_status == "SUCCESS"
     backup_mode = "Eseguito prima del ripristino" if summary.get("BackupExecuted") else "Ultimo restore point (backup saltato)"
     backup_status = str(summary.get("BackupStatus", "—"))
 
@@ -126,7 +128,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
     for key, label, data in workloads:
         icon_uri = _get_workload_logo_data_uri(key)
         icon_tag = f'<img src="{icon_uri}" alt="{key}" style="width:20px;height:20px;vertical-align:middle;margin-right:8px;object-fit:contain;" />' if icon_uri else ''
-        st = str(data.get("Status", "N/A")).upper()
+        st = normalize_status(data.get("Status"), "N/A")
         badge_cls = "badge-success" if st == "SUCCESS" else ("badge-failed" if st in ("FAILED", "ERROR") else "badge-na")
         rp = str(data.get("RestorePointDate") or summary.get("RestorePointDate") or "—")
         user = str(data.get("SourceMailbox") or data.get("SourceUser") or data.get("Site") or "—")
@@ -155,17 +157,20 @@ def render_html_report(summary: dict[str, Any]) -> str:
         rep = j.get("report") or {}
         passed_wls = _job_successful_workloads(j)
         j_pass = _job_has_workload_success(j)
-        j_badge = "badge-success" if j_pass else "badge-failed"
 
         if j_pass:
             if rep.get("AllSuccessful") or len(passed_wls) == 3:
                 j_status = "SUCCESS"
+                j_badge = "badge-success"
             elif passed_wls:
                 j_status = f"SUCCESS ({', '.join(passed_wls)})"
+                j_badge = "badge-success"
             else:
                 j_status = "SUCCESS"
+                j_badge = "badge-success"
         else:
-            j_status = f"EXIT {code}"
+            j_status = "FAILED"
+            j_badge = "badge-failed"
 
         rp = str(rep.get("RestorePointDate") or "—")
 
@@ -180,8 +185,12 @@ def render_html_report(summary: dict[str, Any]) -> str:
         """)
 
     logo_img_tag = f'<img src="{logo_uri}" alt="Logos Technologies" class="header-logo" />' if logo_uri else '<span class="logo-text">LOGOS TECHNOLOGIES</span>'
-    status_banner_cls = "status-pass" if all_successful else "status-attention"
-    status_banner_title = "TEST DI RIPRISTINO SUPERATO CON SUCCESSO" if all_successful else "TEST DI RIPRISTINO RICHIEDE ATTENZIONE"
+    status_banner_cls = {
+        "SUCCESS": "status-pass",
+        "WARNING": "status-warning",
+        "FAILED": "status-failed",
+    }[aggregate_status]
+    status_banner_title = f"RESTORE TEST {aggregate_status}"
     if all_successful:
         tested_wls = [
             label for key, label, data in workloads
@@ -190,7 +199,11 @@ def render_html_report(summary: dict[str, Any]) -> str:
         wls_str = f" ({', '.join(tested_wls)})" if tested_wls else ""
         status_banner_desc = f"Tutti i job e carichi di lavoro selezionati{wls_str} sono stati estratti e verificati con successo con integrità hash SHA-256."
     else:
-        status_banner_desc = "Uno o più carichi di lavoro o processi di ripristino non sono stati completati con successo."
+        status_banner_desc = (
+            "Uno o più carichi di lavoro richiedono verifica."
+            if aggregate_status == "WARNING"
+            else "Il test di ripristino non è stato completato con successo."
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="it">
@@ -206,6 +219,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
             --danger: #EF4444;
             --danger-light: #FEE2E2;
             --warning: #F59E0B;
+            --warning-light: #FEF3C7;
             --success: #10B981;
             --success-light: #D1FAE5;
             --bg: #F9FAFB;
@@ -317,7 +331,11 @@ def render_html_report(summary: dict[str, Any]) -> str:
             background: var(--success-light);
             border-left: 6px solid var(--success);
         }}
-        .status-attention {{
+        .status-warning {{
+            background: var(--warning-light);
+            border-left: 6px solid var(--warning);
+        }}
+        .status-failed {{
             background: var(--danger-light);
             border-left: 6px solid var(--danger);
         }}
@@ -450,6 +468,10 @@ def render_html_report(summary: dict[str, Any]) -> str:
         .badge-failed {{
             background: var(--danger-light);
             color: var(--danger);
+        }}
+        .badge-warning {{
+            background: var(--warning-light);
+            color: #92400E;
         }}
         .badge-na {{
             background: #E5E7EB;
@@ -635,7 +657,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
         <div class="kpi-card">
             <div class="kpi-title">Esito Complessivo</div>
             <div class="kpi-value" style="color: {'var(--primary)' if all_successful else 'var(--danger)'};">
-                {'SUCCESS' if all_successful else 'ATTENZIONE'}
+                {aggregate_status}
             </div>
         </div>
     </div>
@@ -652,7 +674,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
             <div>
                 <div class="info-row"><span class="info-label">Data Esecuzione:</span><span class="info-val">{date_display}</span></div>
                 <div class="info-row"><span class="info-label">Restore Point:</span><span class="info-val">{summary.get('RestorePointDate', '—')}</span></div>
-                <div class="info-row"><span class="info-label">Tool di Test:</span><span class="info-val">Veeam M365 Restore Tester v1.2.1</span></div>
+                <div class="info-row"><span class="info-label">Tool di Test:</span><span class="info-val">Veeam M365 Restore Tester v1.2.4</span></div>
             </div>
         </div>
 

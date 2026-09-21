@@ -75,6 +75,16 @@ def stylesheet() -> str:
             font-size: 14px;
             font-weight: 600;
         }}
+        QLabel#TimerBadge {{
+            color: {c['text_secondary']};
+            background: {c['surface_alt']};
+            border: 1px solid {c['border']};
+            border-radius: 3px;
+            padding: 3px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: "Cascadia Mono", Consolas, monospace;
+        }}
         QLabel#Metric {{
             color: {c['text']};
             font-size: 24px;

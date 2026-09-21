@@ -236,13 +236,7 @@ try {
     Write-InfoLog "Recupero dell'ultimo Restore Point per il job '$JobName'..."
     $restorePoint = Get-VBORestorePoint -Job $job -Latest
     if ($null -eq $restorePoint) {
-        $allPoints = @(Get-VBORestorePoint -Organization $org)
-        if ($allPoints.Count -gt 0) {
-            $restorePoint = $allPoints | Sort-Object -Property BackupTime | Select-Object -Last 1
-        }
-    }
-    if ($null -eq $restorePoint) {
-        throw "Nessun Restore Point trovato per l'organizzazione o job specificato."
+        throw "Nessun Restore Point trovato per il job selezionato '$JobName'. Il test viene interrotto per evitare di usare il Restore Point di un altro job della stessa organizzazione."
     }
 
     $pointDate = $restorePoint.BackupTime
@@ -696,7 +690,7 @@ Cartella Locale   : $runDirectory
 DETTAGLIO RESTORE CAMPIONI (COPIA SU PUNTO LOCALE MACCHINA VEEAM):
 ----------------------------------------------------------------------
 [1] EXCHANGE ONLINE (EMAIL)
-    - Esito       : $(if ($exOk) { "SUCCESSO" } elseif ($null -ne $results.Exchange -and $results.Exchange.Status -eq "NOT_CONFIGURED") { "NON CONFIGURATO NEL JOB" } else { "FALLITO" })
+    - Esito       : $(if ($exOk) { "SUCCESS" } elseif ($null -ne $results.Exchange -and $results.Exchange.Status -eq "NOT_CONFIGURED") { "NOT CONFIGURED" } else { "FAILED" })
     - Casella     : $(if ($exOk) { $results.Exchange.SourceMailbox } else { "N/A" })
     - Oggetto     : $(if ($exOk) { $results.Exchange.Subject } else { "N/A" })
     - File Locale : $(if ($exOk) { $results.Exchange.LocalFile } else { "N/A" })
@@ -704,7 +698,7 @@ DETTAGLIO RESTORE CAMPIONI (COPIA SU PUNTO LOCALE MACCHINA VEEAM):
     - Checksum    : $(if ($exOk) { $results.Exchange.SHA256 } else { "N/A" })
 
 [2] ONEDRIVE FOR BUSINESS (FILE)
-    - Esito       : $(if ($odOk) { "SUCCESSO" } elseif ($null -ne $results.OneDrive -and $results.OneDrive.Status -eq "NOT_CONFIGURED") { "NON CONFIGURATO NEL JOB" } else { "FALLITO" })
+    - Esito       : $(if ($odOk) { "SUCCESS" } elseif ($null -ne $results.OneDrive -and $results.OneDrive.Status -eq "NOT_CONFIGURED") { "NOT CONFIGURED" } else { "FAILED" })
     - Utente      : $(if ($odOk) { $results.OneDrive.SourceUser } else { "N/A" })
     - File        : $(if ($odOk) { $results.OneDrive.FileName } else { "N/A" })
     - File Locale : $(if ($odOk) { $results.OneDrive.LocalFile } else { "N/A" })
@@ -712,7 +706,7 @@ DETTAGLIO RESTORE CAMPIONI (COPIA SU PUNTO LOCALE MACCHINA VEEAM):
     - Checksum    : $(if ($odOk) { $results.OneDrive.SHA256 } else { "N/A" })
 
 [3] SHAREPOINT ONLINE (DOCUMENTO)
-    - Esito       : $(if ($spOk) { "SUCCESSO" } elseif ($null -ne $results.SharePoint -and $results.SharePoint.Status -eq "NOT_CONFIGURED") { "NON CONFIGURATO NEL JOB" } else { "FALLITO" })
+    - Esito       : $(if ($spOk) { "SUCCESS" } elseif ($null -ne $results.SharePoint -and $results.SharePoint.Status -eq "NOT_CONFIGURED") { "NOT CONFIGURED" } else { "FAILED" })
     - Sito / Lib  : $(if ($spOk) { "$($results.SharePoint.Site) / $($results.SharePoint.Library)" } else { "N/A" })
     - Documento   : $(if ($spOk) { $results.SharePoint.FileName } else { "N/A" })
     - File Locale : $(if ($spOk) { $results.SharePoint.LocalFile } else { "N/A" })
@@ -720,7 +714,7 @@ DETTAGLIO RESTORE CAMPIONI (COPIA SU PUNTO LOCALE MACCHINA VEEAM):
     - Checksum    : $(if ($spOk) { $results.SharePoint.SHA256 } else { "N/A" })
 
 ======================================================================
-ESITO COMPLESSIVO OPERAZIONE: $(if ($allPassed) { "TUTTO ANDATO A BUON FINE (SUCCESS)" } else { "PARZIALE O FALLITO" })
+ESITO COMPLESSIVO OPERAZIONE: $(if ($allPassed) { "SUCCESS" } elseif ($hasSuccess) { "WARNING" } else { "FAILED" })
 ======================================================================
 "@
 

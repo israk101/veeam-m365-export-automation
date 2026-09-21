@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -12,16 +13,22 @@ from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from core.config import ConfigManager
-from core.batch_report import build_batch_summary, write_batch_report
+from core.batch_report import (
+    build_batch_summary,
+    build_organization_summaries,
+    normalize_status,
+    overall_status,
+    write_batch_report,
+)
 from core.discovery import MARKER, flatten_inventory, parse_inventory_output
 from core.html_report import render_html_report, write_html_report
 from core.pdf_report import write_pdf_report
 from core.paths import powershell_path
-from core.reports import latest_report, list_reports
+from core.reports import format_duration, latest_report, list_reports
 from core.runner import PowerShellRunner
 from ui.widgets import OrgJobTree
 from ui.dialogs import StyledDialog
-from app import RunPage
+from app import ReportsPage, RunPage, SettingsPage, cleanup_batch_workspace
 
 
 def _run_sample_helper(tmp_path: Path, body: str) -> dict:
@@ -52,12 +59,24 @@ def _run_sample_helper(tmp_path: Path, body: str) -> dict:
     return json.loads(completed.stdout.strip())
 
 
+def test_restore_engine_never_falls_back_to_another_job_restore_point() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    canonical = (project_root / "scripts" / "Invoke-SimpleM365BackupRestoreTest.ps1").read_text(encoding="utf-8-sig")
+    compatibility_copy = (project_root / "Invoke-SimpleM365BackupRestoreTest.ps1").read_text(encoding="utf-8-sig")
+
+    assert canonical == compatibility_copy
+    assert "Get-VBORestorePoint -Job $job -Latest" in canonical
+    assert "Get-VBORestorePoint -Organization $org" not in canonical
+    assert "evitare di usare il Restore Point di un altro job" in canonical
+
+
 def test_config_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     manager = ConfigManager(path)
-    manager.save({"organization": "example.onmicrosoft.com", "unknown": "ignored"})
+    manager.save({"restore_root": "D:\\RestoreTests", "organization": "legacy", "unknown": "ignored"})
     loaded = ConfigManager(path)
-    assert loaded.get("organization") == "example.onmicrosoft.com"
+    assert loaded.get("restore_root") == "D:\\RestoreTests"
+    assert "organization" not in loaded.data
     assert "unknown" not in loaded.data
 
 
@@ -251,7 +270,34 @@ def test_org_job_tree_widget() -> None:
     assert len(tree.selected_jobs()) == 0
     assert tree.selected_dict() == {}
     assert "0 of 2 jobs selected" in tree.topLevelItem(0).text(0)
+
+    # Filtering is case-insensitive, preserves hidden selections, and actions
+    # apply only to visible matches.
+    visible_orgs, visible_jobs = tree.filter_items("FABRIKAM")
+    assert (visible_orgs, visible_jobs) == (1, 1)
+    assert tree.topLevelItem(0).isHidden()
+    assert not tree.topLevelItem(1).isHidden()
+    tree.set_visible(Qt.Checked)
+    assert tree.selected_jobs() == [("Fabrikam", "AllInOne")]
+    visible_orgs, visible_jobs = tree.filter_items("mail")
+    assert (visible_orgs, visible_jobs) == (1, 1)
+    assert tree.selected_jobs() == [("Fabrikam", "AllInOne")]
+    tree.filter_items("")
+    assert not tree.topLevelItem(0).isHidden()
+    assert not tree.topLevelItem(1).isHidden()
     tree.close()
+
+
+def test_settings_focuses_on_operational_defaults(tmp_path: Path) -> None:
+    QApplication.instance() or QApplication([])
+    manager = ConfigManager(tmp_path / "settings.json")
+    page = SettingsPage(manager, lambda: None)
+    assert not hasattr(page, "org")
+    assert not hasattr(page, "job")
+    assert page.restore.text() == str(manager.get("restore_root"))
+    assert page.max_tests.value() == int(manager.get("max_restore_tests"))
+    assert page.skip_backups.isChecked() is bool(manager.get("skip_backups"))
+    page.close()
 
 
 def test_html_report_generation(tmp_path: Path) -> None:
@@ -309,7 +355,7 @@ def test_html_report_generation(tmp_path: Path) -> None:
     html = render_html_report(summary)
     assert "<!DOCTYPE html>" in html
     assert "Contoso Ltd, Fabrikam Corp" in html
-    assert "SUPERATO" in html
+    assert "RESTORE TEST SUCCESS" in html
     assert "Logos Technologies" in html
     assert "A" * 16 in html
 
@@ -365,7 +411,7 @@ def test_html_report_separate_workload_jobs_show_correct_kpi(tmp_path: Path) -> 
     html = render_html_report(summary)
     # KPI card should show 3/3 jobs completed
     assert '<div class="kpi-value">3/3</div>' in html
-    assert "SUPERATO" in html
+    assert "RESTORE TEST SUCCESS" in html
 
     # Badges should indicate individual workload success rather than EXIT 2 failure
     assert "SUCCESS (Exchange)" in html
@@ -436,6 +482,61 @@ def test_write_batch_report_creates_org_directory(tmp_path: Path) -> None:
     # HTML and TXT should also exist
     assert (path.parent / "Report_Summary.html").is_file()
     assert (path.parent / "Report_Summary.txt").is_file()
+
+
+def test_multi_org_run_writes_one_isolated_restore_test_per_organization(tmp_path: Path) -> None:
+    workspace = tmp_path / "Batch_20260921_120000"
+    jobs: list[dict] = []
+    workloads = ("Exchange", "OneDrive", "SharePoint")
+    for org_index in range(1, 6):
+        organization = f"tenant-{org_index}.onmicrosoft.com"
+        for job_index, workload in enumerate(workloads, start=1):
+            source = workspace / "Jobs" / organization / f"job-{job_index}" / f"sample-{org_index}-{job_index}.bin"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(f"{organization}/{workload}".encode())
+            report = {
+                name: (
+                    {"Status": "SUCCESS", "LocalFile": str(source)}
+                    if name == workload else {"Status": "NOT_CONFIGURED"}
+                )
+                for name in workloads
+            }
+            jobs.append({
+                "organization": organization,
+                "job": f"job-{job_index}",
+                "exit_code": 0,
+                "report_path": str(source.parent / "Report_Summary.json"),
+                "report": report,
+                "duration_seconds": job_index,
+            })
+
+    summaries = build_organization_summaries(
+        jobs,
+        True,
+        datetime(2026, 9, 21, 12, 0, 0),
+    )
+    assert len(summaries) == 5
+
+    report_paths = [
+        write_batch_report(tmp_path, summary, report_formats=["txt"])
+        for summary in summaries
+    ]
+    assert cleanup_batch_workspace(workspace, None) is None
+    assert not workspace.exists()
+
+    for org_index, (summary, report_path) in enumerate(zip(summaries, report_paths), start=1):
+        organization = f"tenant-{org_index}.onmicrosoft.com"
+        assert summary["Organization"] == organization
+        assert summary["OrganizationsTested"] == [organization]
+        assert summary["DurationSeconds"] == 6
+        assert len(summary["JobResults"]) == 3
+        assert {entry["organization"] for entry in summary["JobResults"]} == {organization}
+        assert report_path.parent == tmp_path / organization / "RestoreTest_20260921_120000"
+        stored = json.loads(report_path.read_text(encoding="utf-8"))
+        assert {entry["organization"] for entry in stored["JobResults"]} == {organization}
+        assert all(Path(stored[name]["LocalFile"]).is_file() for name in workloads)
+
+    assert not (tmp_path / "Batch_20260921_120000").exists()
 
 
 def test_write_batch_report_retention_applied(tmp_path: Path) -> None:
@@ -587,6 +688,116 @@ def test_selective_report_formats_keep_internal_json(tmp_path: Path) -> None:
     assert (report_dir / "Report_Summary.html").is_file()
     assert not (report_dir / "Report_Summary.txt").exists()
     assert not (report_dir / "Report_Summary.pdf").exists()
+
+
+def test_duration_is_internal_json_only_and_statuses_are_english(tmp_path: Path) -> None:
+    jobs = [
+        {
+            "job": "Mixed workload job",
+            "organization": "tenant-a",
+            "exit_code": 2,
+            "report_path": "mixed.json",
+            "report": {
+                "Exchange": {"Status": "SUCCESS"},
+                "OneDrive": {"Status": "FAILED"},
+                "SharePoint": {"Status": "NOT_CONFIGURED"},
+                "AllSuccessful": False,
+            },
+        }
+    ]
+    summary = build_batch_summary(
+        "tenant-a",
+        jobs,
+        True,
+        datetime(2026, 9, 21, 12, 0, 0),
+        duration_seconds=3661.4,
+    )
+    assert summary["DurationSeconds"] == 3661
+    assert summary["OverallStatus"] == "WARNING"
+    assert overall_status(summary) == "WARNING"
+    assert format_duration(summary["DurationSeconds"]) == "01:01:01"
+    assert normalize_status("ATTENZIONE") == "WARNING"
+    assert normalize_status("FALLITO") == "FAILED"
+    assert normalize_status("NOT_CONFIGURED") == "NOT CONFIGURED"
+
+    json_path = write_batch_report(tmp_path, summary, report_formats=["txt", "html"])
+    stored = json.loads(json_path.read_text(encoding="utf-8"))
+    assert stored["DurationSeconds"] == 3661
+    assert stored["OverallStatus"] == "WARNING"
+
+    text_report = json_path.with_suffix(".txt").read_text(encoding="utf-8")
+    html_report = json_path.with_suffix(".html").read_text(encoding="utf-8")
+    client_output = f"{text_report}\n{html_report}"
+    assert "DurationSeconds" not in client_output
+    assert "01:01:01" not in client_output
+    assert "ATTENZIONE" not in client_output
+    assert "FALLITO" not in client_output
+    assert "NEEDS ATTENTION" not in client_output
+    assert "WARNING" in text_report
+    assert "RESTORE TEST WARNING" in html_report
+
+
+def test_failed_overall_status_when_no_workload_succeeds() -> None:
+    summary = {
+        "AllSuccessful": False,
+        "Exchange": {"Status": "FAILED"},
+        "OneDrive": {"Status": "NOT_CONFIGURED"},
+        "SharePoint": {"Status": "N/A"},
+        "JobResults": [{"exit_code": 2}],
+    }
+    assert overall_status(summary) == "FAILED"
+
+
+def test_run_page_live_timer_and_reports_duration_display(tmp_path: Path) -> None:
+    QApplication.instance() or QApplication([])
+    manager = ConfigManager(tmp_path / "settings.json")
+    manager.save({"restore_root": str(tmp_path)})
+    runner = PowerShellRunner()
+    run_page = RunPage(manager, runner, lambda _code: None, auto_discover=False)
+    assert run_page.elapsed_label.text() == "Elapsed 00:00:00"
+    run_page.batch_started_monotonic = time.monotonic() - 65
+    run_page._update_elapsed()
+    assert run_page.elapsed_label.text().startswith("Elapsed 00:01:")
+
+    summary = build_batch_summary(
+        "tenant-a",
+        [{
+            "job": "Mail",
+            "organization": "tenant-a",
+            "exit_code": 0,
+            "report_path": "mail.json",
+            "report": {
+                "Exchange": {"Status": "SUCCESS"},
+                "OneDrive": {"Status": "NOT_CONFIGURED"},
+                "SharePoint": {"Status": "NOT_CONFIGURED"},
+                "AllSuccessful": True,
+            },
+        }],
+        True,
+        datetime(2026, 9, 21, 12, 0, 0),
+        duration_seconds=65,
+    )
+    write_batch_report(tmp_path, summary, report_formats=["txt"])
+    reports_page = ReportsPage(manager)
+    reports_page.refresh()
+    assert "SUCCESS" in reports_page.list.item(0).text()
+    assert "00:01:05" in reports_page.list.item(0).text()
+    assert "Duration: 00:01:05" in reports_page.detail.toPlainText()
+    run_page.close()
+    reports_page.close()
+
+
+def test_cleanup_batch_workspace_keeps_only_final_report_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / "Batch_20260921_120000"
+    (workspace / "Jobs" / "tenant" / "job").mkdir(parents=True)
+    (workspace / "Jobs" / "tenant" / "job" / "temporary.bin").write_bytes(b"data")
+    report_dir = tmp_path / "tenant" / "RestoreTest_20260921_120000"
+    report_dir.mkdir(parents=True)
+    (report_dir / "Report_Summary.json").write_text("{}", encoding="utf-8")
+
+    assert cleanup_batch_workspace(workspace, report_dir) is None
+    assert not workspace.exists()
+    assert (report_dir / "Report_Summary.json").is_file()
 
 
 def test_styled_dialog_uses_application_buttons() -> None:

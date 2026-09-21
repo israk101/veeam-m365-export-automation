@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,57 @@ WORKLOAD_RESTORE_FOLDERS = {
     "OneDrive": "restore one drive",
     "SharePoint": "restore share point",
 }
+
+
+def normalize_status(value: Any, default: str = "N/A") -> str:
+    """Return a stable English status label for UI and client reports."""
+    raw = str(value or "").strip().upper().replace("_", " ")
+    aliases = {
+        "SUCCESSO": "SUCCESS",
+        "PASSED": "SUCCESS",
+        "PASS": "SUCCESS",
+        "FALLITO": "FAILED",
+        "ERROR": "FAILED",
+        "ATTENZIONE": "WARNING",
+        "NEEDS ATTENTION": "WARNING",
+        "WARN": "WARNING",
+        "NON CONFIGURATO": "NOT CONFIGURED",
+        "NON CONFIGURATO NEL JOB": "NOT CONFIGURED",
+    }
+    return aliases.get(raw, raw or default)
+
+
+def overall_status(summary: dict[str, Any]) -> str:
+    """Classify the aggregate result as SUCCESS, WARNING, or FAILED."""
+    explicit = normalize_status(summary.get("OverallStatus"), "")
+    if explicit in {"SUCCESS", "WARNING", "FAILED"}:
+        return explicit
+    if summary.get("AllSuccessful"):
+        return "SUCCESS"
+
+    statuses = [
+        normalize_status((summary.get(workload) or {}).get("Status"), "")
+        for workload in WORKLOADS
+        if isinstance(summary.get(workload), dict)
+    ]
+    success_count = sum(status == "SUCCESS" for status in statuses)
+    failure_count = sum(status == "FAILED" for status in statuses)
+    if failure_count:
+        return "WARNING" if success_count else "FAILED"
+    if success_count:
+        return "WARNING"
+
+    exit_codes = [entry.get("exit_code") for entry in summary.get("JobResults", [])]
+    if any(code not in (None, 0) for code in exit_codes):
+        return "FAILED"
+    return "WARNING"
+
+
+def client_report_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Remove internal-only telemetry before rendering client-facing reports."""
+    client_summary = deepcopy(summary)
+    client_summary.pop("DurationSeconds", None)
+    return client_summary
 
 
 def copy_workload_artifacts(directory: Path, summary: dict[str, Any]) -> None:
@@ -65,6 +117,7 @@ def build_batch_summary(
     jobs: list[dict[str, Any]],
     skip_backup: bool,
     timestamp: datetime | None = None,
+    duration_seconds: int | float | None = None,
 ) -> dict[str, Any]:
     now = timestamp or datetime.now()
     org_groups: dict[str, list[dict[str, Any]]] = {}
@@ -90,6 +143,8 @@ def build_batch_summary(
         "JobResults": jobs,
         "AllSuccessful": False,
     }
+    if duration_seconds is not None:
+        summary["DurationSeconds"] = max(0, int(round(float(duration_seconds))))
     for workload in WORKLOADS:
         candidates = [
             entry.get("report", {}).get(workload)
@@ -132,7 +187,35 @@ def build_batch_summary(
     all_jobs_passed = bool(jobs) and all(_job_is_successful(entry) for entry in jobs)
 
     summary["AllSuccessful"] = all_jobs_passed and any_workload_success and not any_workload_failed
+    summary["OverallStatus"] = overall_status(summary)
     return summary
+
+
+def build_organization_summaries(
+    jobs: list[dict[str, Any]],
+    skip_backup: bool,
+    timestamp: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Build one independent summary for each organization in job order."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in jobs:
+        organization = str(entry.get("organization", "")).strip() or "Unknown organization"
+        grouped.setdefault(organization, []).append(entry)
+
+    summaries: list[dict[str, Any]] = []
+    for organization, organization_jobs in grouped.items():
+        duration = sum(
+            max(0, float(entry.get("duration_seconds", 0) or 0))
+            for entry in organization_jobs
+        )
+        summaries.append(build_batch_summary(
+            organization,
+            organization_jobs,
+            skip_backup,
+            timestamp,
+            duration_seconds=duration,
+        ))
+    return summaries
 
 
 def write_batch_report(
@@ -170,7 +253,7 @@ def write_batch_report(
     copy_workload_artifacts(directory, summary)
     json_path = directory / "Report_Summary.json"
     json_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    status = "SUCCESS" if summary.get("AllSuccessful") else "NEEDS ATTENTION"
+    status = overall_status(summary)
     lines = [
         "VEEAM M365 MULTI-JOB RESTORE TEST",
         "=" * 48,
@@ -182,7 +265,7 @@ def write_batch_report(
     ]
     for workload in WORKLOADS:
         item = summary.get(workload) or {}
-        st = item.get("Status", "N/A")
+        st = normalize_status(item.get("Status"), "N/A")
         loc = item.get("LocalFile")
         if loc and Path(loc).is_file():
             lines.append(f"{workload:12}: {st} (File: {Path(loc).name})")
@@ -193,14 +276,19 @@ def write_batch_report(
         org_prefix = f"[{entry.get('organization')}] " if entry.get("organization") else ""
         rep = entry.get("report") if isinstance(entry.get("report"), dict) else {}
         passed = [wl for wl in WORKLOADS if isinstance(rep.get(wl), dict) and str(rep.get(wl, {}).get("Status", "")).upper() == "SUCCESS"]
-        tag = f" [SUCCESS: {', '.join(passed)}]" if passed else (" [SUCCESS]" if entry.get("exit_code") == 0 else "")
-        lines.append(f"- {org_prefix}{entry.get('job')}: exit {entry.get('exit_code')}{tag} ({entry.get('report_path') or 'no report'})")
+        if rep.get("AllSuccessful") or entry.get("exit_code") == 0 or passed:
+            job_status = "SUCCESS"
+        else:
+            job_status = "FAILED"
+        detail = f": {', '.join(passed)}" if passed else ""
+        lines.append(f"- {org_prefix}{entry.get('job')}: {job_status}{detail} · exit {entry.get('exit_code')} ({entry.get('report_path') or 'no report'})")
     if "txt" in selected_formats:
         (directory / "Report_Summary.txt").write_text("\n".join(lines), encoding="utf-8")
+    rendered_summary = client_report_summary(summary)
     if "html" in selected_formats:
         try:
             from core.html_report import write_html_report
-            write_html_report(directory, summary)
+            write_html_report(directory, rendered_summary)
         except Exception:
             pass
 
@@ -208,7 +296,7 @@ def write_batch_report(
     if "pdf" in selected_formats:
         try:
             from core.pdf_report import write_pdf_report
-            write_pdf_report(directory, summary)
+            write_pdf_report(directory, rendered_summary)
         except Exception:
             pass
 

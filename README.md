@@ -1,79 +1,184 @@
-# Veeam M365 Restore Tester v1.2.1
+# Veeam M365 Restore Tester
 
-> Non-destructive Microsoft 365 backup verification with a modern Windows desktop interface, local evidence extraction and executive reporting.
+> A Windows desktop application for repeatable, non-destructive verification of Veeam Backup for Microsoft 365 restore points.
 
-[![PowerShell](https://img.shields.io/badge/PowerShell-7.0%2B-0078D4?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
+[![Release](https://img.shields.io/badge/release-1.2.4-6E56CF)](version_info.txt)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
+[![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![GUI](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
-[![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
-[![License](https://img.shields.io/badge/License-MIT-8A2BE2)](LICENSE)
+[![Qt](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52?logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
+[![License](https://img.shields.io/badge/license-MIT-2EA44F)](LICENSE)
 
-Veeam M365 Restore Tester wraps the existing PowerShell restore-verification engine in a focused desktop application. It discovers local Veeam Backup for Microsoft 365 organizations and jobs, executes selected tests sequentially, streams progress in real time, and collects locally restored Exchange, OneDrive and SharePoint samples with SHA-256 evidence.
+Veeam M365 Restore Tester discovers organizations and backup jobs from the local Veeam Backup for Microsoft 365 server, runs selected verification jobs sequentially, restores representative Exchange, OneDrive and SharePoint items to local storage, validates the extracted files and produces evidence reports.
 
-The workflow is intentionally out-of-place: it does not restore content into Microsoft 365 and does not modify tenant data.
+The restore destination is always local. The application does **not** restore data into Microsoft 365 and does not modify tenant content.
 
-![Veeam M365 Restore Tester settings](examples/v1.2-settings.png)
+![Application preview](examples/VeeamM365RestoreTester-preview.png)
 
-## Highlights in v1.2.1
+## Documentation
 
-- Modern PySide6 desktop UI with Dashboard, Run test, Reports and Settings views.
-- Automatic organization and backup-job discovery from the local VB365 server.
-- Multi-organization and multi-job selection with a hierarchical checkbox tree.
-- Sequential, non-blocking PowerShell execution with live color-coded logs and phase status.
-- Optional backup-job execution, or fast verification from the latest existing restore point.
-- Mandatory internal JSON evidence plus independently selectable TXT, HTML and PDF reports.
-- Corporate-styled HTML/PDF executive reports rendered with the bundled Qt WebEngine.
-- Historical report browser, direct evidence-folder access and configurable retention.
-- Consistent custom confirmation, warning, error and success dialogs.
-- Standalone, UAC-aware Windows executable with scripts and visual assets embedded.
-- Resilient sample selection: folders are excluded and failed/empty exports automatically retry another randomized item (up to 25 attempts per workload by default).
+Choose the shortest path for what you need:
 
-## Safety model
+| Goal | Start here |
+|---|---|
+| Install and run the packaged application | [Quick start](#quick-start) |
+| Understand a test result | [Results and status model](#results-and-status-model) |
+| Operate, troubleshoot or deploy the application | [Complete HTML manual](docs/index.html) |
+| Understand or modify the implementation | [Architecture reference](docs/ARCHITECTURE.md) |
+| Run only the PowerShell engine | [PowerShell CLI](#powershell-cli) |
+| Build or test from source | [Development](#development) |
 
-The application is designed around four boundaries:
+The HTML manual is self-contained: download the repository and open `docs/index.html` in any modern browser. It includes prerequisites, deployment, UI walkthroughs, exact runtime flows, component responsibilities, data contracts, reporting, retention, security, troubleshooting and maintenance guidance.
 
-1. **Out-of-place extraction only.** Restore samples are written under the configured local restore root.
-2. **No tenant credentials in the GUI.** Authentication and Veeam connectivity remain inside the server's installed VB365 PowerShell environment.
-3. **Read-only discovery.** Startup inventory enumerates organizations and jobs but does not change Veeam configuration.
-4. **Explicit interruption.** Stopping an active run requires confirmation; the child PowerShell process is terminated gracefully and killed only if it does not exit.
+## What it verifies
 
-Production data in Microsoft 365 is never used as a restore destination.
+For every selected organization/job pair, the engine can optionally run the backup job and then opens its latest restore point. It attempts one locally restored, non-empty sample from each available workload:
 
-## Requirements
+- **Exchange Online:** exports one message as evidence.
+- **OneDrive for Business:** exports one document.
+- **SharePoint Online:** exports one document.
 
-- Windows 10, Windows 11, or Windows Server 2016 or later.
-- PowerShell 7 available as `pwsh.exe` in `PATH`.
-- Veeam Backup for Microsoft 365 8.x/8.6 installed on the same machine.
-- The `Veeam.Archiver.PowerShell` module and the relevant Veeam Explorer components.
-- Local permissions to connect to the VB365 service and write to the chosen restore root.
-- Administrator approval when the packaged executable requests elevation.
+Each accepted file must exist, have a size greater than zero and produce a SHA-256 hash. Empty folders, folder-like objects, stale items and failed exports are skipped; another randomized candidate is attempted up to the configured PowerShell limit (25 by default).
 
-Python is not required when using the standalone executable.
+This is a sampling test. A successful run demonstrates that representative content could be opened and extracted from the tested restore point; it is not an exhaustive validation of every protected object.
+
+Restore-point identity is fail-safe: the engine requests the latest restore point for the exact selected job. If none exists, that queue item fails instead of falling back to a different job in the same organization.
+
+## Key capabilities
+
+- Automatic, read-only discovery of local Veeam organizations and jobs.
+- Fast organization/job search that filters the existing tree without reconnecting to Veeam or losing checked selections.
+- Multi-organization and multi-job execution through a deterministic sequential queue.
+- Optional backup execution, or faster testing of existing restore points.
+- Responsive GUI with live PowerShell output, current phase and elapsed time.
+- Isolated per-job workspaces and one final evidence/report directory per organization.
+- Mandatory machine-readable JSON plus optional TXT, self-contained HTML and PDF reports.
+- English result vocabulary across report surfaces: `SUCCESS`, `WARNING`, `FAILED` and `NOT CONFIGURED`.
+- Configurable per-organization retention.
+- Portable PyInstaller `onedir` distribution for faster startup than a self-extracting one-file package.
+- Job-bound restore-point lookup that fails safely instead of using another job's organization-level restore point.
+
+## Prerequisites
+
+The application must run on the machine that hosts, or can locally administer, the Veeam Backup for Microsoft 365 installation used for the test.
+
+| Requirement | Why it is needed |
+|---|---|
+| Windows 10/11 or Windows Server 2016+ | Supported desktop/runtime environment. |
+| Veeam Backup for Microsoft 365 8.x/8.6 | Provides the server, restore points and Explorer APIs. |
+| `Veeam.Archiver.PowerShell` | Organization, job, backup and restore-point operations. |
+| Relevant Veeam Explorers | Exchange, OneDrive and SharePoint item restore sessions. |
+| PowerShell 7 (`pwsh.exe`) in `PATH` | Executes discovery and restore scripts. |
+| Local administrator approval | The packaged executable requests elevation through its manifest. |
+| Write access to the restore root | Stores restored samples and reports. |
+
+Python is needed only for source development. It is bundled in the portable distribution.
 
 ## Quick start
 
-### Standalone executable
+### 1. Get the portable application
 
-1. Clone or download this repository. Git LFS is required when cloning because the executable is stored as an LFS object.
-2. Run `VeeamM365RestoreTester.exe` and approve the UAC prompt.
-3. Wait for local organizations and jobs to appear, or use **Refresh**.
-4. Select one or more jobs.
-5. Leave **Don't run backup jobs** enabled to use existing restore points, or disable it to run each backup job first.
-6. Select **Run selected jobs**.
-7. Open the result from the completion dialog, Dashboard or Reports view.
+Clone/download the repository, or use a packaged release. The current portable output has this shape:
 
-### Python source
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python main.py
+```text
+dist\VeeamM365RestoreTester\
+├── VeeamM365RestoreTester.exe
+└── _internal\
 ```
 
-### PowerShell CLI
+Keep the executable and `_internal` together. To distribute the application, ZIP the entire `VeeamM365RestoreTester` directory—not only the `.exe`.
 
-The engine remains usable without the GUI:
+The repository also retains a compatibility **single-file** `VeeamM365RestoreTester.exe`. It is standalone and current, but starts more slowly because it must extract Python, Qt and Chromium at launch. The `onedir` package above is the recommended distribution for routine use.
+
+### 2. Start and discover
+
+1. Run `VeeamM365RestoreTester.exe` and approve the UAC prompt.
+2. Wait for the local inventory to load. Use **Refresh inventory** if Veeam configuration changed after launch.
+3. Search by organization or job name if the server contains a large inventory.
+
+### 3. Configure and run
+
+1. Check one or more jobs.
+2. Choose the local restore root.
+3. Leave **Don't run backup jobs** checked to test the latest existing restore points. Clear it to run each selected backup job first.
+4. Select **Run selected jobs**.
+5. Follow the current job, phase, elapsed time and live output. Selected jobs run one at a time.
+
+### 4. Review evidence
+
+After completion, open the output from the dialog, Dashboard or Reports tab. JSON is always written for application history; TXT, HTML and PDF are controlled in Settings.
+
+For deployment details and validation checks, see the [installation guide in the HTML manual](docs/index.html#deployment).
+
+## How multi-job execution works
+
+The checked tree is converted into an ordered queue of `(organization, job)` pairs. The GUI starts one PowerShell process per pair and does not start the next item until the current process exits. Sequential execution avoids competing Veeam Explorer sessions and keeps every log line, temporary file and report attributable to one job.
+
+```text
+checked jobs
+  → PendingJob queue
+  → job 1: optional backup → restore tests → per-job JSON
+  → job 2: optional backup → restore tests → per-job JSON
+  → ...
+  → group completed jobs by organization
+  → copy representative evidence
+  → write one final report set per organization
+  → delete temporary Batch_* workspace
+```
+
+The search box changes only which tree rows are visible. It does not rebuild the tree, rerun discovery or clear hidden selections. **Select visible** and **Clear visible** affect only the current search result.
+
+## Results and status model
+
+| Status | Meaning |
+|---|---|
+| `SUCCESS` | At least one valid sample was restored and all required checks for that result passed. |
+| `WARNING` | The run produced useful evidence but one or more jobs/workloads need attention. |
+| `FAILED` | No acceptable successful result could be established, or the job/process failed. |
+| `NOT CONFIGURED` | The workload is not protected/present for the tested job or restore point. |
+
+The internal `Report_Summary.json` contains job details and `DurationSeconds` for Dashboard/Reports. Client-facing TXT/HTML/PDF reports intentionally exclude runtime duration. Exit code alone is not used as the complete business result: aggregation also evaluates the workload records present in each per-job report.
+
+## Output and retention
+
+Final results are separated by organization:
+
+```text
+C:\VeeamRestoreLocalTest\
+└── <organization>\
+    └── RestoreTest_YYYYMMDD_HHMMSS\
+        ├── Report_Summary.json       # always generated; internal evidence/history
+        ├── Report_Summary.txt        # optional
+        ├── Report_Summary.html       # optional, self-contained
+        ├── Report_Summary.pdf        # optional
+        ├── restore email\            # Exchange evidence, when available
+        ├── restore one drive\        # OneDrive evidence, when available
+        └── restore share point\      # SharePoint evidence, when available
+```
+
+Per-job work is initially created below a temporary `Batch_YYYYMMDD_HHMMSS\Jobs\...` tree. The batch directory is removed only after every organization summary has been written successfully. Retention then keeps the newest configured number of `RestoreTest_*` directories per organization; the default is five.
+
+## Configuration
+
+Settings are persisted atomically at:
+
+```text
+%APPDATA%\VeeamM365RestoreTester\settings.json
+```
+
+| Setting | Default | Scope |
+|---|---:|---|
+| Restore root | `C:\VeeamRestoreLocalTest` | Where final evidence and reports are stored. |
+| Tests retained per organization | `5` | Deletes the oldest matching completed test directories. |
+| Use latest restore points | Enabled | Starts runs with `-SkipBackup`; it can be overridden in Run test. |
+| Report formats | TXT, HTML, PDF | JSON is mandatory and cannot be disabled. |
+| Custom PowerShell engine | Bundled script | Advanced override for controlled development or deployment. |
+
+Credentials, tenant secrets and Veeam passwords are never written to this file.
+
+## PowerShell CLI
+
+The restore engine remains usable independently of the GUI:
 
 ```powershell
 pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
@@ -85,199 +190,107 @@ pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
   -MaxSampleAttempts 25
 ```
 
-The duplicate script at the repository root is retained for backward compatibility with earlier command examples. The packaged application uses the canonical copy under `scripts\`.
+Remove `-SkipBackup` to execute the selected backup job before restore verification. The root-level script is retained for backward compatibility; `scripts\Invoke-SimpleM365BackupRestoreTest.ps1` is the canonical packaged copy.
 
-## Output layout
-
-For a GUI batch, every selected job first receives an isolated working directory. The batch aggregator then writes the final evidence under the organization directory:
+## Architecture at a glance
 
 ```text
-C:\VeeamRestoreLocalTest\
-└── <organization>\
-    └── RestoreTest_YYYYMMDD_HHMMSS\
-        ├── Report_Summary.json       # always generated; powers Dashboard/Reports
-        ├── Report_Summary.txt        # optional
-        ├── Report_Summary.html       # optional, self-contained
-        ├── Report_Summary.pdf        # optional, Chromium/Qt WebEngine output
-        ├── Jobs\                     # per-job execution reports/work areas
-        ├── restore email\            # selected Exchange sample evidence
-        ├── restore one drive\        # selected OneDrive sample evidence
-        └── restore share point\      # selected SharePoint sample evidence
+PySide6 UI (app.py, ui/)
+        │
+        ├─ inventory QProcess ── Get-VeeamM365Inventory.ps1 ── VB365
+        │
+        └─ job QProcess ──────── Invoke-SimpleM365BackupRestoreTest.ps1
+                                      │
+                                      └─ RestoreSampleHelpers.ps1
+        │
+        └─ Python aggregation (core/batch_report.py)
+                 ├─ JSON/TXT
+                 ├─ HTML
+                 ├─ Qt WebEngine PDF
+                 └─ retention and report history
 ```
 
-TXT, HTML and PDF can be enabled independently in Settings. JSON cannot be disabled because it is the application’s internal historical evidence format. Retention is applied per organization to directories matching `RestoreTest_YYYYMMDD_HHMMSS`; the default is the five newest tests.
+The GUI and PowerShell engine communicate through command-line arguments, merged process output and per-job JSON files. This process boundary keeps the Veeam automation usable without the GUI and prevents Veeam credentials from entering Python.
 
-## Technical architecture
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component contracts and [docs/index.html](docs/index.html#architecture) for the complete technical narrative.
 
-### Component map
-
-| Component | Responsibility |
-|---|---|
-| `main.py` | Creates the Qt application, selects Fusion styling, loads the icon/font and opens the main window. |
-| `app.py` | Coordinates navigation, job selection, the pending-job queue, execution lifecycle, report views and Settings. |
-| `ui/theme.py` | Central dark-theme stylesheet and visual tokens. |
-| `ui/widgets.py` | Reusable navigation, job-tree, log and status widgets. |
-| `ui/dialogs.py` | Frameless application-native confirmations, errors, warnings and completion dialogs. |
-| `core/discovery.py` | Runs the inventory helper asynchronously and validates its marked JSON payload. |
-| `core/runner.py` | Starts/stops the restore engine with `QProcess`, streams merged output and translates log milestones into UI phases. |
-| `core/batch_report.py` | Merges per-job results, selects usable evidence and writes the final batch summary. |
-| `core/html_report.py` | Generates the self-contained branded executive HTML report. |
-| `core/pdf_report.py` | Loads report HTML in Qt WebEngine and prints it to PDF. |
-| `core/reports.py` | Discovers and parses historical `Report_Summary.json` files. |
-| `core/retention.py` | Removes the oldest matching test folders after a completed batch. |
-| `core/config.py` | Loads defaults and atomically persists supported settings. |
-| `core/paths.py` | Resolves source-tree and PyInstaller `_MEIPASS` resource paths plus `pwsh.exe`. |
-| `scripts/Get-VeeamM365Inventory.ps1` | Read-only organization/job inventory for the local VB365 installation. |
-| `scripts/Invoke-SimpleM365BackupRestoreTest.ps1` | Existing backup/restore verification engine and per-job evidence producer. |
-| `scripts/RestoreSampleHelpers.ps1` | Container filtering, isolated export attempts, non-zero validation, collision handling and SHA-256 verification. |
-
-### Runtime flow
-
-```text
-Application start
-  -> Get-VeeamM365Inventory.ps1
-  -> validated organization/job JSON
-  -> checkbox selection in the GUI
-  -> PendingJob queue
-  -> one QProcess invocation per selected job
-  -> per-job Report_Summary.json files
-  -> Python batch aggregation and evidence copy
-  -> mandatory JSON + selected TXT/HTML/PDF outputs
-  -> retention cleanup
-  -> Dashboard and Reports refresh
-```
-
-Jobs are deliberately processed sequentially. This avoids multiple restore sessions competing for the same local Veeam services and keeps logs/evidence attributable to one organization and job at a time. Qt's event loop remains responsive because both discovery and restore execution use `QProcess` rather than blocking Python subprocess calls.
-
-The restore runner starts PowerShell with the following boundary:
-
-```text
-pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
-  -File <script>
-  -OrganizationName <tenant>
-  -JobName <job>
-  -LocalRestoreRoot <job-working-folder>
-  [-SkipBackup]
-```
-
-Standard output and error are merged so ordering is preserved in the live log. `[OK]`, `[WARN]` and `[ERR]` markers determine log color; known PowerShell milestones update the current phase shown in the UI.
-
-### Resilient sample selection
-
-SharePoint's `Get-VESPDocument` can return both documents and folder containers. The selection pipeline explicitly rejects objects whose `IsContainer` or `IsFolder` property is true. OneDrive applies the same guard and retains the extension check used for compatibility with older Explorer object models.
-
-Candidates are randomized, but an item is not accepted merely because it was returned by Veeam. Each Exchange, OneDrive or SharePoint candidate is exported into its own short-lived directory and must pass all of these checks:
-
-1. The export command completes without a terminating error.
-2. At least one regular file is produced recursively.
-3. The chosen output has a size greater than zero.
-4. The file can be copied without overwriting an existing evidence file.
-5. A SHA-256 hash can be calculated from the final copy.
-
-If any check fails, the attempt directory is removed and the next candidate is tried. Enumeration errors affecting one mailbox, OneDrive user, SharePoint site or document library no longer abort the entire workload. `-MaxSampleAttempts` bounds the work (default `25`, accepted range `1..1000`) and prevents pathological repositories from producing an endless loop. Empty workloads are reported as not configured; a workload with candidates that all fail validation remains a genuine failure.
-
-### Discovery protocol
-
-`Get-VeeamM365Inventory.ps1` connects to the local VB365 service, enumerates organizations and their jobs, serializes a compact JSON payload and disconnects in `finally`. Python accepts only an object containing an `Organizations` array. The marker-based extraction allows ordinary PowerShell/Veeam informational output to coexist with the machine-readable payload.
-
-### Reporting and evidence aggregation
-
-Each job is executed under `<batch>/Jobs/<safe-organization>/<safe-job>`. The aggregator reads only a report produced after that job started and verifies that its `JobName` matches the queued job. It then calculates overall status from the selected subset, groups results by organization, copies representative workload evidence to the final test folder and emits the summary.
-
-HTML reports embed their styling and brand assets. PDF creation uses `QWebEngineView.printToPdf`, so PyInstaller must include Qt WebEngine and its Chromium helper process. This is also why the standalone executable is significantly larger than a basic PySide6 application.
-
-### Configuration
-
-Settings are stored at:
-
-```text
-%APPDATA%\VeeamM365RestoreTester\settings.json
-```
-
-The file contains only supported application preferences: selected jobs, restore root, optional custom script path, appearance, retention limit, backup-skip default and report formats. Saving uses a temporary file followed by an atomic replace. Credentials and tenant secrets are not stored.
-
-| Setting | Default |
-|---|---|
-| Restore root | `C:\VeeamRestoreLocalTest` |
-| Maximum tests per organization | `5` |
-| Skip backup jobs | `true` |
-| User-facing report formats | `txt`, `html`, `pdf` |
-| Appearance | `dark` |
-
-### Packaging
-
-`build.ps1` invokes PyInstaller 6 in one-file, windowed mode and embeds both PowerShell scripts, icons, logos and UI SVG/PNG assets. The executable manifest requests administrator elevation with `--uac-admin`. File and product version metadata comes from `version_info.txt`.
-
-```powershell
-.\build.ps1
-```
-
-Output:
-
-```text
-dist\VeeamM365RestoreTester.exe
-```
-
-The checked-in v1.2.1 executable is approximately 197 MiB because it includes Python, Qt 6 and the Qt WebEngine/Chromium runtime required for PDF reports. It is tracked with Git LFS to remain compatible with GitHub's normal file-size limit.
-
-### Repository layout
+## Repository structure
 
 ```text
 .
-├── app.py
-├── main.py
-├── core\
-├── ui\
-├── assets\
-├── scripts\
-├── tests\
-├── tools\
-├── examples\
-├── build.ps1
-├── VeeamM365RestoreTester.spec
-├── version_info.txt
-├── requirements.txt
-└── VeeamM365RestoreTester.exe
+├── app.py                         # pages and application orchestration
+├── main.py                        # Qt entry point
+├── core/                          # discovery, runner, reports, retention, paths
+├── ui/                            # reusable widgets, dialogs and theme
+├── scripts/                       # canonical PowerShell automation
+├── assets/                        # embedded icons and report branding
+├── docs/                          # complete manual and architecture reference
+├── examples/                      # screenshots and sample reports
+├── tests/                         # automated Python/Qt tests
+├── tools/                         # UI/icon maintenance helpers
+├── build.ps1                      # reproducible PyInstaller build
+├── VeeamM365RestoreTester.spec    # generated packaging specification
+├── version_info.txt               # Windows executable metadata
+└── requirements.txt               # pinned Python build dependencies
 ```
 
-## Build and test
+Generated `build/`, `dist/` and `scratch/` content is not source documentation and should not be committed as normal project code.
 
-Install the pinned build dependencies:
+## Development
+
+### Run from source
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python main.py
 ```
 
-Run the automated suite:
+### Run tests
 
 ```powershell
 python -m pytest -q
 ```
 
-The suite covers configuration persistence, inventory parsing, report discovery, retention, multi-job aggregation, selective output formats, HTML generation and asynchronous PDF generation. Veeam-integrated restore testing still requires a configured Windows/VB365 host.
+The automated suite covers configuration filtering/persistence, discovery parsing, tree search and selection preservation, multi-job aggregation, status normalization, report discovery, retention, output-format selection, duration handling, HTML generation, PDF completion and temporary-workspace cleanup. A configured Veeam host is still required for an end-to-end backup/restore acceptance test.
 
-Build the executable:
+### Build the portable application
 
 ```powershell
 .\build.ps1
 ```
 
-## Version integrity
+The build requests administrator privileges, embeds the scripts/assets and produces `dist\VeeamM365RestoreTester\`. Qt WebEngine/Chromium is included for PDF rendering, so the complete portable folder is large (approximately 528 MiB). `onedir` is intentional: it avoids extracting that runtime on every launch and starts faster than a one-file bundle.
 
-The repository executable and `version_info.txt` identify this release as **1.2.1**.
+## Operational boundaries
 
-Published executable SHA-256:
+- Discovery is read-only, but disabling **Don't run backup jobs** starts real Veeam backup jobs.
+- Restore validation is sample-based, not a complete restore of all protected data.
+- Jobs execute sequentially; total time grows with the number and size of selected jobs.
+- Reports and restored samples can contain customer information. Protect the restore root with suitable NTFS access, retention and transfer controls.
+- PDF generation failures do not prevent mandatory JSON evidence from being written. Review enabled output files after each run.
+- The GUI expects PowerShell 7 and a local Veeam module; it is not a remote-control client for an arbitrary VB365 server.
+
+## Release integrity
+
+Version: **1.2.4**
+
+Recommended `onedir` launcher SHA-256:
 
 ```text
-6A0B397F584EC5C6973FF8A1A3B09D536916753D368F22A4999EFB881183A47D
+240914FC342C4862C5EDF344ACCB6E93E71AEEF3F29C60062E52437F49924363
 ```
 
-You can verify it with:
+Compatibility standalone EXE SHA-256: `826C1780D8E7BE7DD984AEF66EEF172A972861F0445FF5594B34361D92D35913`.
+
+Verify the local build with:
 
 ```powershell
-Get-FileHash .\VeeamM365RestoreTester.exe -Algorithm SHA256
+Get-FileHash .\dist\VeeamM365RestoreTester\VeeamM365RestoreTester.exe -Algorithm SHA256
 ```
 
 ## License
 
-Distributed under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE).

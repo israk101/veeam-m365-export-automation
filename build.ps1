@@ -5,7 +5,7 @@ Set-Location -LiteralPath $ProjectRoot
 python -m PyInstaller `
     --noconfirm `
     --clean `
-    --onefile `
+    --onedir `
     --windowed `
     --uac-admin `
     --name VeeamM365RestoreTester `
@@ -33,4 +33,4 @@ python -m PyInstaller `
     --add-data "assets\checkbox_dash.svg;assets" `
     main.py
 
-Write-Host "Built: $ProjectRoot\dist\VeeamM365RestoreTester.exe"
+Write-Host "Built: $ProjectRoot\dist\VeeamM365RestoreTester\VeeamM365RestoreTester.exe"

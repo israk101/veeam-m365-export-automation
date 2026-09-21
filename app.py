@@ -4,8 +4,10 @@ import ctypes
 from dataclasses import dataclass
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
@@ -13,7 +15,6 @@ from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -35,10 +36,10 @@ from PySide6.QtWidgets import (
 )
 
 from core.config import ConfigManager
-from core.batch_report import build_batch_summary, write_batch_report
+from core.batch_report import build_organization_summaries, normalize_status, overall_status, write_batch_report
 from core.discovery import InventoryDiscovery, flatten_inventory
 from core.paths import bundled_script, discovery_script, powershell_path, resolve_script, resource_path
-from core.reports import Report, latest_report, list_reports, read_report
+from core.reports import Report, format_duration, latest_report, list_reports, read_report
 from core.runner import PowerShellRunner
 from ui.theme import COLORS, stylesheet
 from ui.widgets import LogConsole, OrgJobTree, PageHeading, StatusCard
@@ -56,6 +57,24 @@ def clear_layout(layout: QVBoxLayout | QHBoxLayout | QGridLayout) -> None:
         item = layout.takeAt(0)
         if item.widget():
             item.widget().deleteLater()
+
+
+def cleanup_batch_workspace(workspace: Path | None, report_directory: Path | None) -> str | None:
+    """Remove temporary job output after the final report has been written.
+
+    Normal GUI runs write final reports below organization directories, so the
+    whole ``Batch_*`` staging directory can go. The Jobs-only branch preserves
+    compatibility if a caller deliberately writes a final report in Batch.
+    """
+    if not workspace or not workspace.is_dir() or not workspace.name.startswith("Batch_"):
+        return None
+    try:
+        target = workspace / "Jobs" if report_directory == workspace else workspace
+        if target.is_dir():
+            shutil.rmtree(target)
+        return None
+    except OSError as exc:
+        return str(exc)
 
 
 class DashboardPage(QWidget):
@@ -147,16 +166,18 @@ class DashboardPage(QWidget):
             return
 
         data = report.data
-        passed = report.passed
+        status = overall_status(data)
+        passed = status == "SUCCESS"
+        status_color = COLORS["green"] if passed else (COLORS["amber"] if status == "WARNING" else COLORS["red"])
         status_file = resource_path(f"assets/{'status_verified.svg' if passed else 'status_attention.svg'}")
         if status_file.is_file():
             self.summary_icon.setPixmap(QPixmap(str(status_file)).scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
             self.summary_icon.setText("✓" if passed else "!")
-            self.summary_icon.setStyleSheet(f"font-size: 24px; color: {COLORS['green'] if passed else COLORS['red']}; font-weight: 700;")
+            self.summary_icon.setStyleSheet(f"font-size: 24px; color: {status_color}; font-weight: 700;")
 
-        self.summary_title.setText("All workloads verified" if passed else "Restore test needs attention")
-        self.summary_title.setStyleSheet(f"font-size: 15px; font-weight: 650; color: {'#FFFFFF' if passed else COLORS['red']};")
+        self.summary_title.setText(f"Restore test {status}")
+        self.summary_title.setStyleSheet(f"font-size: 15px; font-weight: 650; color: {'#FFFFFF' if passed else status_color};")
         self.summary_detail.setText(f"{data.get('Organization', 'Unknown tenant')} · {report.timestamp}")
         self.exchange.update_data(data.get("Exchange"))
         self.onedrive.update_data(data.get("OneDrive"))
@@ -178,23 +199,29 @@ class RunPage(QWidget):
         self.completed_jobs: list[dict[str, Any]] = []
         self.current_job: PendingJob | None = None
         self.current_started_at = 0.0
+        self.current_started_monotonic: float | None = None
         self.batch_started: datetime | None = None
+        self.batch_started_monotonic: float | None = None
         self.batch_directory: Path | None = None
         self.current_job_root: Path | None = None
         self.stop_requested = False
         root = QVBoxLayout(self)
         root.setSpacing(16)
-        root.addWidget(PageHeading("Guided operation", "Run restore test", "Choose an organization, select one or more jobs, then follow each restore test in one place."))
+        root.addWidget(PageHeading(
+            "Guided operation",
+            "Run restore test",
+            "Find organizations, choose their jobs, confirm the destination, then follow the run live.",
+        ))
         body = QHBoxLayout()
         body.setSpacing(16)
         form_panel = QFrame()
         form_panel.setObjectName("Panel")
-        form_panel.setMinimumWidth(390)
-        form_panel.setMaximumWidth(480)
+        form_panel.setMinimumWidth(420)
+        form_panel.setMaximumWidth(520)
         panel_layout = QVBoxLayout(form_panel)
         panel_layout.setContentsMargins(18, 18, 18, 18)
-        panel_layout.setSpacing(11)
-        form_title = QLabel("Test configuration")
+        panel_layout.setSpacing(8)
+        form_title = QLabel("1 · Choose organizations and jobs")
         form_title.setObjectName("CardTitle")
         panel_layout.addWidget(form_title)
         inventory_row = QHBoxLayout()
@@ -205,33 +232,55 @@ class RunPage(QWidget):
         inventory_row.addWidget(self.inventory_status, stretch=1)
         inventory_row.addWidget(self.refresh_inventory_button)
         panel_layout.addLayout(inventory_row)
-        form = QFormLayout()
-        form.setVerticalSpacing(11)
+
+        self.job_search = QLineEdit()
+        self.job_search.setObjectName("SearchInput")
+        self.job_search.setPlaceholderText("Search organizations or jobs…")
+        self.job_search.setClearButtonEnabled(True)
+        self.job_search.setEnabled(False)
+        self.job_search.textChanged.connect(self._filter_jobs)
+        panel_layout.addWidget(self.job_search)
+
+        self.filter_status = QLabel("Inventory will appear here after discovery.")
+        self.filter_status.setObjectName("Muted")
+        panel_layout.addWidget(self.filter_status)
+
+        self.job_tree = OrgJobTree()
+        self.job_tree.setMinimumHeight(145)
+        self.job_tree.setToolTip("Select jobs across any organization. Checked jobs run sequentially.")
+        self.job_tree.selection_changed.connect(self._update_selection_summary)
+        panel_layout.addWidget(self.job_tree, stretch=1)
+
+        selection_row = QHBoxLayout()
+        self.selection_status = QLabel("No jobs selected")
+        self.selection_status.setObjectName("Muted")
+        self.select_visible_button = QPushButton("Select visible")
+        self.select_visible_button.setEnabled(False)
+        self.select_visible_button.setToolTip("Select only the jobs currently shown by the search filter.")
+        self.select_visible_button.clicked.connect(lambda: self._set_visible_jobs(Qt.Checked))
+        self.clear_visible_button = QPushButton("Clear visible")
+        self.clear_visible_button.setEnabled(False)
+        self.clear_visible_button.setToolTip("Clear only the jobs currently shown by the search filter.")
+        self.clear_visible_button.clicked.connect(lambda: self._set_visible_jobs(Qt.Unchecked))
+        selection_row.addWidget(self.selection_status, stretch=1)
+        selection_row.addWidget(self.select_visible_button)
+        selection_row.addWidget(self.clear_visible_button)
+        panel_layout.addLayout(selection_row)
+
+        options_title = QLabel("2 · Configure this run")
+        options_title.setObjectName("CardTitle")
+        panel_layout.addWidget(options_title)
+        destination_label = QLabel("Restore destination")
+        destination_label.setObjectName("Muted")
+        panel_layout.addWidget(destination_label)
         self.restore = QLineEdit(str(config.get("restore_root")))
+        self.restore.setToolTip("Final reports are grouped into one folder per organization under this path.")
         restore_row = QHBoxLayout()
         restore_row.addWidget(self.restore)
-        browse = QPushButton("Browse")
-        browse.clicked.connect(self._browse_restore)
-        restore_row.addWidget(browse)
-        form.addRow("Restore folder", restore_row)
-        panel_layout.addLayout(form)
-        jobs_header = QHBoxLayout()
-        jobs_label = QLabel("Organizations & Jobs")
-        jobs_label.setObjectName("CardTitle")
-        select_all = QPushButton("Select all")
-        select_all.clicked.connect(lambda: self._set_all_jobs(Qt.Checked))
-        clear_all = QPushButton("Clear")
-        clear_all.clicked.connect(lambda: self._set_all_jobs(Qt.Unchecked))
-        jobs_header.addWidget(jobs_label)
-        jobs_header.addStretch()
-        jobs_header.addWidget(select_all)
-        jobs_header.addWidget(clear_all)
-        panel_layout.addLayout(jobs_header)
-        self.job_tree = OrgJobTree()
-        self.job_tree.setMinimumHeight(150)
-        self.job_tree.setMaximumHeight(230)
-        self.job_tree.setToolTip("Select jobs across any organization. Checked jobs run sequentially.")
-        panel_layout.addWidget(self.job_tree)
+        self.restore_browse_button = QPushButton("Browse")
+        self.restore_browse_button.clicked.connect(self._browse_restore)
+        restore_row.addWidget(self.restore_browse_button)
+        panel_layout.addLayout(restore_row)
         skip_row = QHBoxLayout()
         skip_row.setSpacing(10)
         self.skip = QCheckBox("Don't run backup jobs")
@@ -244,11 +293,12 @@ class RunPage(QWidget):
         skip_row.addWidget(self.skip_default_label)
         skip_row.addStretch()
         panel_layout.addLayout(skip_row)
-        tip = QLabel("Extracted files remain in the selected folder. The test does not restore data back to Microsoft 365.")
+        tip = QLabel("Each organization receives its own report and evidence folder. Nothing is restored back to Microsoft 365.")
         tip.setObjectName("Muted")
         tip.setWordWrap(True)
         panel_layout.addWidget(tip)
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.run_button = QPushButton("Run selected jobs")
         self.run_button.setObjectName("Primary")
         self.run_button.clicked.connect(self.start)
@@ -271,9 +321,12 @@ class RunPage(QWidget):
         title_row = QHBoxLayout()
         activity_title = QLabel("Live activity")
         activity_title.setObjectName("CardTitle")
+        self.elapsed_label = QLabel("Elapsed 00:00:00")
+        self.elapsed_label.setObjectName("TimerBadge")
         self.phase = QLabel("Ready")
         self.phase.setObjectName("Muted")
         title_row.addWidget(activity_title)
+        title_row.addWidget(self.elapsed_label)
         title_row.addStretch()
         title_row.addWidget(self.phase)
         activity_layout.addLayout(title_row)
@@ -293,6 +346,9 @@ class RunPage(QWidget):
         runner.failed_to_start.connect(self._start_error)
         self.discovery.completed.connect(self._inventory_loaded)
         self.discovery.failed.connect(self._inventory_failed)
+        self.elapsed_timer = QTimer(self)
+        self.elapsed_timer.setInterval(250)
+        self.elapsed_timer.timeout.connect(self._update_elapsed)
         self.sync_defaults()
         if auto_discover:
             QTimer.singleShot(0, self.refresh_inventory)
@@ -301,6 +357,8 @@ class RunPage(QWidget):
         if not self.restore.hasFocus():
             self.restore.setText(str(self.config.get("restore_root")))
         default_skip = bool(self.config.get("skip_backups", True))
+        if not self.skip.hasFocus() and not self.runner.is_running():
+            self.skip.setChecked(default_skip)
         self.skip_default_label.setText(f"(Default: {'On' if default_skip else 'Off'} in Settings)")
 
     def refresh_inventory(self) -> None:
@@ -314,6 +372,9 @@ class RunPage(QWidget):
             return
         self.refresh_inventory_button.setEnabled(False)
         self.job_tree.setEnabled(False)
+        self.job_search.setEnabled(False)
+        self.select_visible_button.setEnabled(False)
+        self.clear_visible_button.setEnabled(False)
         self.inventory_status.setText("Connecting to localhost…")
         self.discovery.start(shell, script)
 
@@ -328,20 +389,65 @@ class RunPage(QWidget):
         self.job_tree.load_inventory(self.inventory, preselected)
         self.refresh_inventory_button.setEnabled(True)
         self.job_tree.setEnabled(bool(self.inventory))
+        self.job_search.setEnabled(bool(self.inventory))
+        self.select_visible_button.setEnabled(bool(self.inventory))
+        self.clear_visible_button.setEnabled(bool(self.inventory))
         count = len(self.inventory)
         self.inventory_status.setText(f"{count} organization{'s' if count != 1 else ''} found on localhost")
+        self._filter_jobs(self.job_search.text())
+        self._update_selection_summary()
 
     def _inventory_failed(self, message: str) -> None:
         self.refresh_inventory_button.setEnabled(True)
         self.job_tree.setEnabled(False)
+        self.job_search.setEnabled(False)
+        self.select_visible_button.setEnabled(False)
+        self.clear_visible_button.setEnabled(False)
         self.inventory_status.setText("Discovery unavailable — select Refresh to retry")
+        self.filter_status.setText("Inventory unavailable")
         self.log.append_line(f"[ERR] Organization discovery failed: {message}", "error")
 
     def _set_all_jobs(self, state: Qt.CheckState) -> None:
         self.job_tree.set_all(state)
 
-    def _selected_jobs(self) -> list[str]:
-        return [job for _, job in self.job_tree.selected_jobs()]
+    def _set_visible_jobs(self, state: Qt.CheckState) -> None:
+        self.job_tree.set_visible(state)
+
+    def _filter_jobs(self, query: str) -> None:
+        organizations, jobs = self.job_tree.filter_items(query)
+        if query.strip():
+            self.filter_status.setText(
+                f"{organizations} matching organization{'s' if organizations != 1 else ''} · "
+                f"{jobs} job{'s' if jobs != 1 else ''} shown"
+            )
+        else:
+            total_jobs = sum(len(items) for items in self.inventory.values())
+            self.filter_status.setText(
+                f"{len(self.inventory)} organization{'s' if len(self.inventory) != 1 else ''} · "
+                f"{total_jobs} job{'s' if total_jobs != 1 else ''}"
+            )
+
+    def _update_selection_summary(self) -> None:
+        selected = self.job_tree.selected_jobs()
+        organizations = len({organization for organization, _job in selected})
+        jobs = len(selected)
+        if jobs:
+            self.selection_status.setText(
+                f"{jobs} job{'s' if jobs != 1 else ''} across "
+                f"{organizations} organization{'s' if organizations != 1 else ''} selected"
+            )
+        else:
+            self.selection_status.setText("No jobs selected")
+
+    def _set_configuration_enabled(self, enabled: bool) -> None:
+        has_inventory = bool(self.inventory)
+        self.job_tree.setEnabled(enabled and has_inventory)
+        self.job_search.setEnabled(enabled and has_inventory)
+        self.select_visible_button.setEnabled(enabled and has_inventory)
+        self.clear_visible_button.setEnabled(enabled and has_inventory)
+        self.restore.setEnabled(enabled)
+        self.restore_browse_button.setEnabled(enabled)
+        self.skip.setEnabled(enabled)
 
     def _selected_multi_org_jobs(self) -> list[PendingJob]:
         return [PendingJob(org, job) for org, job in self.job_tree.selected_jobs()]
@@ -367,28 +473,26 @@ class RunPage(QWidget):
             return
         Path(restore).mkdir(parents=True, exist_ok=True)
         multi_dict = self.job_tree.selected_dict()
-        first_org = selections[0].org_name
-        first_job = selections[0].job_name
         self.config.save({
-            "organization": first_org,
-            "job_name": first_job,
-            "selected_jobs": [s.job_name for s in selections],
             "selected_multi_org_jobs": multi_dict,
             "restore_root": restore,
         })
         self.log.clear()
         mode = "latest restore points" if self.skip.isChecked() else "backup then restore"
-        org_label = first_org if len(multi_dict) <= 1 else f"{len(multi_dict)} organizations"
+        org_label = selections[0].org_name if len(multi_dict) <= 1 else f"{len(multi_dict)} organizations"
         self.log.append_line(f"[INFO] Starting {len(selections)} job(s) for {org_label} — {mode}.", "info")
         self.run_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.open_folder_button.setEnabled(False)
         self.refresh_inventory_button.setEnabled(False)
-        self.job_tree.setEnabled(False)
+        self._set_configuration_enabled(False)
         self.progress.setRange(0, 0)
         self.pending_jobs = list(selections)
         self.completed_jobs = []
         self.batch_started = datetime.now()
+        self.batch_started_monotonic = monotonic()
+        self.elapsed_label.setText("Elapsed 00:00:00")
+        self.elapsed_timer.start()
         self.batch_directory = Path(restore) / f"Batch_{self.batch_started.strftime('%Y%m%d_%H%M%S')}"
         self.stop_requested = False
         self._start_next_job()
@@ -399,6 +503,7 @@ class RunPage(QWidget):
             return
         self.current_job = self.pending_jobs.pop(0)
         self.current_started_at = datetime.now().timestamp()
+        self.current_started_monotonic = monotonic()
         safe_org = re.sub(r"[^A-Za-z0-9._-]+", "_", self.current_job.org_name).strip("._") or "org"
         safe_job = re.sub(r"[^A-Za-z0-9._-]+", "_", self.current_job.job_name).strip("._") or "job"
         self.current_job_root = (self.batch_directory or Path(self.restore.text().strip())) / "Jobs" / safe_org / safe_job
@@ -454,6 +559,10 @@ class RunPage(QWidget):
             "exit_code": code,
             "report_path": report_path,
             "report": report_data,
+            "duration_seconds": max(
+                0,
+                int(round(monotonic() - self.current_started_monotonic)),
+            ) if self.current_started_monotonic is not None else 0,
         })
         rep = report_data if isinstance(report_data, dict) else {}
         passed_wls = [
@@ -466,49 +575,88 @@ class RunPage(QWidget):
         wl_info = f" ({', '.join(passed_wls)})" if passed_wls and len(passed_wls) < 3 else ""
         self.log.append_line(f"[{status_tag}] Job '{self.current_job.job_name}' finished with exit code {code}{wl_info}.", level)
         self.current_job = None
+        self.current_started_monotonic = None
         self._start_next_job()
 
     def _finish_batch(self) -> None:
-        orgs = list(dict.fromkeys(job.get("organization", "") for job in self.completed_jobs if job.get("organization")))
-        org_label = orgs[0] if len(orgs) == 1 else (f"{len(orgs)} organizations" if orgs else "")
-        summary = build_batch_summary(org_label, self.completed_jobs, self.skip.isChecked(), self.batch_started)
+        duration_seconds = self._elapsed_seconds()
+        self.elapsed_timer.stop()
+        self.elapsed_label.setText(f"Completed in {format_duration(duration_seconds)}")
+        summaries = build_organization_summaries(
+            self.completed_jobs,
+            self.skip.isChecked(),
+            self.batch_started,
+        )
         max_keep = int(self.config.get("max_restore_tests", 5))
         report_formats = list(self.config.get("report_formats", ["txt", "html", "pdf"]))
-        report_path = write_batch_report(
-            self.restore.text().strip(),
-            summary,
-            max_keep=max_keep,
-            report_formats=report_formats,
-        ) if self.completed_jobs else None
-        if report_path and report_path.is_file():
-            self.batch_directory = report_path.parent
+        report_paths: list[Path] = []
+        for summary in summaries:
+            report_path = write_batch_report(
+                self.restore.text().strip(),
+                summary,
+                max_keep=max_keep,
+                report_formats=report_formats,
+            )
+            if report_path.is_file():
+                report_paths.append(report_path)
+                status = overall_status(summary)
+                level = "success" if summary.get("AllSuccessful") else "warning"
+                tag = "OK" if summary.get("AllSuccessful") else "WARN"
+                self.log.append_line(
+                    f"[{tag}] {summary.get('Organization')} report: {status}: {report_path}",
+                    level,
+                )
+
+        if report_paths and len(report_paths) == len(summaries):
+            cleanup_error = cleanup_batch_workspace(self.batch_directory, None)
+            if cleanup_error:
+                self.log.append_line(f"[WARN] Could not remove temporary test files: {cleanup_error}", "warning")
+            else:
+                self.log.append_line("[INFO] Temporary test workspace removed.", "info")
+            self.batch_directory = (
+                report_paths[0].parent
+                if len(report_paths) == 1
+                else Path(self.restore.text().strip())
+            )
         self.run_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.open_folder_button.setEnabled(bool(self.batch_directory and self.batch_directory.exists()))
         self.refresh_inventory_button.setEnabled(True)
-        self.job_tree.setEnabled(bool(self.inventory))
+        self._set_configuration_enabled(True)
         self.progress.setRange(0, 100)
-        self.progress.setValue(100 if summary.get("AllSuccessful") else 0)
+        all_successful = bool(summaries) and all(summary.get("AllSuccessful") for summary in summaries)
+        any_successful = any(summary.get("AllSuccessful") for summary in summaries)
+        self.progress.setValue(100 if all_successful else 0)
         if self.stop_requested:
             self.phase.setText("Stopped by user")
             self.log.append_line("[WARN] Multi-job run stopped by user.", "warning")
-        elif summary.get("AllSuccessful"):
-            self.phase.setText("All workloads verified")
-            self.log.append_line(f"[OK] Combined report passed: {report_path}", "success")
+        elif all_successful:
+            self.phase.setText("All organization reports verified")
         else:
-            self.phase.setText("Combined report needs attention")
-            self.log.append_line(f"[WARN] Combined report needs attention: {report_path}", "warning")
-        self.finished_callback(0 if summary.get("AllSuccessful") else 2)
+            status = "WARNING" if any_successful else "FAILED"
+            self.phase.setText(f"Organization reports: {status}")
+        self.finished_callback(0 if all_successful else 2)
 
     def _start_error(self, message: str) -> None:
+        duration_seconds = self._elapsed_seconds()
+        self.elapsed_timer.stop()
+        self.elapsed_label.setText(f"Stopped at {format_duration(duration_seconds)}")
         self.run_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.refresh_inventory_button.setEnabled(True)
-        self.job_tree.setEnabled(bool(self.inventory))
+        self._set_configuration_enabled(True)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.phase.setText("Could not start")
         show_error(self, "Could not start PowerShell", message)
+
+    def _elapsed_seconds(self) -> int:
+        if self.batch_started_monotonic is None:
+            return 0
+        return max(0, int(monotonic() - self.batch_started_monotonic))
+
+    def _update_elapsed(self) -> None:
+        self.elapsed_label.setText(f"Elapsed {format_duration(self._elapsed_seconds())}")
 
     def _open_test_folder(self) -> None:
         if self.batch_directory and self.batch_directory.exists():
@@ -574,8 +722,10 @@ class ReportsPage(QWidget):
         self.reports = list_reports(str(self.config.get("restore_root")))
         self.list.clear()
         for report in self.reports:
-            status = "Passed" if report.passed else "Needs attention"
-            item = QListWidgetItem(f"{status}  ·  {report.timestamp}\n{report.data.get('Organization', 'Unknown tenant')}")
+            status = overall_status(report.data)
+            duration = format_duration(report.data.get("DurationSeconds"))
+            duration_suffix = f"  ·  {duration}" if duration != "—" else ""
+            item = QListWidgetItem(f"{status}{duration_suffix}  ·  {report.timestamp}\n{report.data.get('Organization', 'Unknown tenant')}")
             item.setToolTip(str(report.path))
             self.list.addItem(item)
         if self.reports:
@@ -597,6 +747,7 @@ class ReportsPage(QWidget):
             f"Organization: {data.get('Organization', '—')}",
             f"Job: {data.get('JobName', '—')}",
             f"Run: {report.timestamp}",
+            f"Duration: {format_duration(data.get('DurationSeconds'))}",
             f"Backup: {data.get('BackupStatus', '—')}",
             f"Restore point: {data.get('RestorePointDate', '—')}",
             "",
@@ -605,14 +756,14 @@ class ReportsPage(QWidget):
             item: dict[str, Any] = data.get(name) or {}
             lines.extend([
                 name.upper(),
-                f"  Status: {item.get('Status', '—')}",
+                f"  Status: {normalize_status(item.get('Status'), 'N/A')}",
                 f"  Source: {item.get('SourceMailbox') or item.get('SourceUser') or item.get('Site') or '—'}",
                 f"  Item: {item.get('Subject') or item.get('FileName') or '—'}",
                 f"  File: {item.get('LocalFile', '—')}",
                 f"  SHA-256: {item.get('SHA256', '—')}",
                 "",
             ])
-        self.detail_title.setText("Restore test passed" if report.passed else "Restore test needs attention")
+        self.detail_title.setText(f"Restore test {overall_status(data)}")
         self.detail.setPlainText("\n".join(lines))
         self.open_folder_button.setEnabled(True)
         self.open_txt_button.setEnabled(report.path.with_suffix(".txt").exists())
@@ -652,52 +803,73 @@ class SettingsPage(QWidget):
         self.config = config
         self.save_callback = save_callback
         root = QVBoxLayout(self)
-        root.addWidget(PageHeading("Preferences", "Settings", "Set sensible defaults once; you can still change them before every run."))
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        panel.setMaximumWidth(780)
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(22, 22, 22, 22)
-        title = QLabel("Default values")
-        title.setObjectName("CardTitle")
-        panel_layout.addWidget(title)
-        form = QFormLayout()
-        form.setVerticalSpacing(14)
-        self.org = QLineEdit(str(config.get("organization")))
-        self.job = QLineEdit(str(config.get("job_name")))
+        root.setSpacing(16)
+        root.addWidget(PageHeading(
+            "Preferences",
+            "Settings",
+            "Configure storage, run behavior and report output. Organizations and jobs are selected in Run test.",
+        ))
+
+        cards = QHBoxLayout()
+        cards.setSpacing(16)
+
+        storage_panel = QFrame()
+        storage_panel.setObjectName("Panel")
+        storage_layout = QVBoxLayout(storage_panel)
+        storage_layout.setContentsMargins(22, 20, 22, 20)
+        storage_layout.setSpacing(12)
+        storage_title = QLabel("Storage & retention")
+        storage_title.setObjectName("CardTitle")
+        storage_description = QLabel("Choose where organization reports are stored and how much history is retained.")
+        storage_description.setObjectName("Muted")
+        storage_description.setWordWrap(True)
+        storage_layout.addWidget(storage_title)
+        storage_layout.addWidget(storage_description)
+
+        storage_form = QFormLayout()
+        storage_form.setVerticalSpacing(14)
         self.restore = QLineEdit(str(config.get("restore_root")))
         restore_row = QHBoxLayout()
         restore_row.addWidget(self.restore)
         restore_browse = QPushButton("Browse")
         restore_browse.clicked.connect(self._browse_restore)
         restore_row.addWidget(restore_browse)
-        self.script = QLineEdit(str(config.get("script_path")))
-        self.script.setPlaceholderText(f"Bundled script ({bundled_script()})")
-        script_row = QHBoxLayout()
-        script_row.addWidget(self.script)
-        script_browse = QPushButton("Browse")
-        script_browse.clicked.connect(self._browse_script)
-        script_row.addWidget(script_browse)
         self.max_tests = QSpinBox()
         self.max_tests.setRange(1, 100)
         self.max_tests.setValue(int(config.get("max_restore_tests", 5)))
         self.max_tests.setToolTip("Oldest restore test folders are automatically deleted when this limit is exceeded.")
-        form.addRow("Organization", self.org)
-        form.addRow("Backup job", self.job)
-        form.addRow("Restore folder", restore_row)
-        form.addRow("Custom script", script_row)
-        form.addRow("Max tests per org", self.max_tests)
+        storage_form.addRow("Restore folder", restore_row)
+        storage_form.addRow("Tests kept per org", self.max_tests)
+        storage_layout.addLayout(storage_form)
+        storage_layout.addStretch()
+        cards.addWidget(storage_panel, stretch=1)
 
-        self.skip_backups = QCheckBox("Don't run backup jobs (use latest restore points)")
+        output_panel = QFrame()
+        output_panel.setObjectName("Panel")
+        output_layout = QVBoxLayout(output_panel)
+        output_layout.setContentsMargins(22, 20, 22, 20)
+        output_layout.setSpacing(12)
+        output_title = QLabel("Run defaults & reports")
+        output_title.setObjectName("CardTitle")
+        output_description = QLabel("Set the starting behavior for new tests and choose client-facing report formats.")
+        output_description.setObjectName("Muted")
+        output_description.setWordWrap(True)
+        output_layout.addWidget(output_title)
+        output_layout.addWidget(output_description)
+
+        self.skip_backups = QCheckBox("Use latest restore points by default")
         self.skip_backups.setChecked(bool(config.get("skip_backups", True)))
-        self.skip_backups.setToolTip("Default value for new tests on the Run page: test existing restore points without running new backups.")
-        form.addRow("Default backup behavior", self.skip_backups)
+        self.skip_backups.setToolTip("Starts new runs with backup jobs disabled. You can change it in Run test before starting.")
+        output_layout.addWidget(self.skip_backups)
+        skip_help = QLabel("When enabled, the app tests existing restore points without starting a new backup job.")
+        skip_help.setObjectName("Muted")
+        skip_help.setWordWrap(True)
+        output_layout.addWidget(skip_help)
 
         selected_formats = {str(item).lower() for item in (config.get("report_formats", ["txt", "html", "pdf"]) or [])}
-        formats_widget = QWidget()
-        formats_layout = QHBoxLayout(formats_widget)
-        formats_layout.setContentsMargins(0, 0, 0, 0)
-        formats_layout.setSpacing(18)
+        formats_label = QLabel("Final report formats")
+        formats_label.setObjectName("Muted")
+        output_layout.addWidget(formats_label)
         self.format_txt = QCheckBox("Text (.txt)")
         self.format_html = QCheckBox("HTML (.html)")
         self.format_pdf = QCheckBox("PDF (.pdf)")
@@ -705,25 +877,43 @@ class SettingsPage(QWidget):
         self.format_html.setChecked("html" in selected_formats)
         self.format_pdf.setChecked("pdf" in selected_formats)
         for checkbox in (self.format_txt, self.format_html, self.format_pdf):
-            formats_layout.addWidget(checkbox)
-        formats_layout.addStretch()
-        form.addRow("Final report formats", formats_widget)
+            output_layout.addWidget(checkbox)
+        json_help = QLabel("Internal JSON is always generated for Dashboard and Reports.")
+        json_help.setObjectName("Muted")
+        json_help.setWordWrap(True)
+        output_layout.addWidget(json_help)
+        output_layout.addStretch()
+        cards.addWidget(output_panel, stretch=1)
+        root.addLayout(cards)
 
-        panel_layout.addLayout(form)
-        note = QLabel(
-            "Leave Custom script empty to use the tested copy bundled inside the application.\n"
-            "JSON evidence is always generated because Dashboard and Reports use it internally. "
-            "Choose one or more user-facing final report formats above.\n"
-            "Oldest restore test folders are pruned automatically when the per-org limit is reached."
-        )
-        note.setObjectName("Muted")
-        note.setWordWrap(True)
-        panel_layout.addWidget(note)
+        advanced_panel = QFrame()
+        advanced_panel.setObjectName("Panel")
+        advanced_layout = QVBoxLayout(advanced_panel)
+        advanced_layout.setContentsMargins(22, 18, 22, 18)
+        advanced_layout.setSpacing(10)
+        advanced_header = QHBoxLayout()
+        advanced_title = QLabel("Advanced · PowerShell engine")
+        advanced_title.setObjectName("CardTitle")
+        advanced_hint = QLabel("Leave empty to use the tested script bundled with the app.")
+        advanced_hint.setObjectName("Muted")
+        advanced_header.addWidget(advanced_title)
+        advanced_header.addStretch()
+        advanced_header.addWidget(advanced_hint)
+        advanced_layout.addLayout(advanced_header)
+        self.script = QLineEdit(str(config.get("script_path")))
+        self.script.setPlaceholderText(f"Bundled script ({bundled_script()})")
+        script_row = QHBoxLayout()
+        script_row.addWidget(self.script)
+        script_browse = QPushButton("Browse")
+        script_browse.clicked.connect(self._browse_script)
+        script_row.addWidget(script_browse)
+        advanced_layout.addLayout(script_row)
+        root.addWidget(advanced_panel)
+
         save = QPushButton("Save settings")
         save.setObjectName("Primary")
         save.clicked.connect(self._save)
-        panel_layout.addWidget(save, alignment=Qt.AlignLeft)
-        root.addWidget(panel, alignment=Qt.AlignLeft)
+        root.addWidget(save, alignment=Qt.AlignRight)
         root.addStretch()
 
     def _browse_restore(self) -> None:
@@ -755,8 +945,6 @@ class SettingsPage(QWidget):
             show_warning(self, "Report format required", "Select at least one final report format: Text, HTML, or PDF.")
             return
         self.config.save({
-            "organization": self.org.text().strip(),
-            "job_name": self.job.text().strip(),
             "restore_root": restore,
             "script_path": custom,
             "max_restore_tests": self.max_tests.value(),

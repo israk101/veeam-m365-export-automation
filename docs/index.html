@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Complete operating, deployment and technical documentation for Veeam M365 Restore Tester 1.2.4.">
+  <title>Veeam M365 Restore Tester · Complete Documentation</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --surface: #ffffff;
+      --surface-alt: #f0eef9;
+      --text: #1b1d22;
+      --muted: #5f6572;
+      --border: #dfe2e8;
+      --brand: #5c46b8;
+      --brand-strong: #402b9b;
+      --brand-soft: #ebe7fb;
+      --success: #16784b;
+      --warning: #9a5b00;
+      --danger: #b3261e;
+      --info: #1559a5;
+      --code-bg: #17181d;
+      --code-text: #f4f5f7;
+      --shadow: 0 12px 30px rgba(24, 27, 36, .08);
+      --radius: 14px;
+      --sidebar: 292px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.65 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    }
+    a { color: var(--brand-strong); text-underline-offset: 3px; }
+    a:hover { color: var(--brand); }
+    code, pre { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+    code {
+      padding: .12rem .35rem;
+      border-radius: 5px;
+      background: var(--brand-soft);
+      font-size: .9em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 1rem 0;
+      padding: 1rem 1.1rem;
+      border-radius: 10px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      font-size: .88rem;
+      line-height: 1.55;
+    }
+    pre code { padding: 0; background: transparent; color: inherit; }
+    h1, h2, h3, h4 { line-height: 1.22; letter-spacing: -.02em; }
+    h1 { margin: .6rem 0 1rem; font-size: clamp(2.35rem, 5vw, 4.5rem); }
+    h2 { margin: 0 0 1.1rem; font-size: clamp(1.7rem, 3vw, 2.25rem); }
+    h3 { margin: 1.75rem 0 .65rem; font-size: 1.28rem; }
+    h4 { margin: 1.35rem 0 .5rem; font-size: 1.05rem; }
+    p, ul, ol { margin: .65rem 0 1rem; }
+    li + li { margin-top: .32rem; }
+    kbd {
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: var(--surface);
+      padding: .08rem .35rem;
+      font: .85em "Segoe UI", sans-serif;
+    }
+    .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 1.35rem 1rem 2rem;
+      border-right: 1px solid var(--border);
+      background: #15161a;
+      color: #f5f5f7;
+    }
+    .brand { display: flex; align-items: center; gap: .8rem; margin: 0 .5rem 1.25rem; }
+    .brand-mark {
+      display: grid; place-items: center; flex: 0 0 38px; height: 38px;
+      border-radius: 10px; background: linear-gradient(145deg, #806de0, #48319e);
+      font-weight: 800;
+    }
+    .brand strong { display: block; line-height: 1.2; }
+    .brand small { color: #adb0ba; }
+    .sidebar nav > a, .sidebar details a {
+      display: block;
+      padding: .44rem .65rem;
+      border-radius: 7px;
+      color: #d8dae0;
+      text-decoration: none;
+      font-size: .91rem;
+    }
+    .sidebar nav > a:hover, .sidebar details a:hover { background: #292a31; color: white; }
+    .sidebar details { margin: .1rem 0; }
+    .sidebar summary {
+      cursor: pointer; padding: .48rem .65rem; border-radius: 7px;
+      color: white; font-weight: 650; font-size: .92rem;
+    }
+    .sidebar details a { margin-left: .55rem; color: #b9bdc7; font-size: .86rem; }
+    .sidebar-footer {
+      margin: 1.5rem .5rem 0; padding-top: 1rem; border-top: 1px solid #34353c;
+      color: #a7aab4; font-size: .78rem;
+    }
+    main { min-width: 0; }
+    .hero {
+      padding: clamp(3rem, 7vw, 7rem) clamp(1.5rem, 6vw, 6rem) 4rem;
+      background:
+        radial-gradient(circle at 85% 10%, rgba(130, 106, 224, .24), transparent 30%),
+        linear-gradient(135deg, #191a20 0%, #25212f 58%, #302260 100%);
+      color: white;
+    }
+    .eyebrow { color: #bdb0f3; text-transform: uppercase; letter-spacing: .15em; font-size: .76rem; font-weight: 750; }
+    .lede { max-width: 800px; color: #d9d7e2; font-size: 1.14rem; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1.4rem; }
+    .pill { padding: .36rem .72rem; border: 1px solid #5a5669; border-radius: 999px; color: #e9e7f0; font-size: .82rem; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.7rem; }
+    .button {
+      display: inline-block; padding: .7rem 1rem; border-radius: 8px; text-decoration: none;
+      background: #806de0; color: white; font-weight: 700;
+    }
+    .button.secondary { background: transparent; border: 1px solid #7e798c; }
+    .button:hover { color: white; background: #907fe6; }
+    .content { width: min(1120px, calc(100% - 3rem)); margin: 0 auto; padding: 2.5rem 0 6rem; }
+    section {
+      margin: 1.5rem 0;
+      padding: clamp(1.4rem, 3vw, 2.4rem);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    section section { margin: 1rem 0; padding: 1.25rem; box-shadow: none; background: var(--bg); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { padding: 1.15rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+    .card h3, .card h4 { margin-top: 0; }
+    .card p:last-child { margin-bottom: 0; }
+    .callout { margin: 1rem 0; padding: 1rem 1.15rem; border-left: 4px solid var(--info); border-radius: 6px; background: #edf5ff; }
+    .callout.warning { border-color: var(--warning); background: #fff5df; }
+    .callout.danger { border-color: var(--danger); background: #fff0ef; }
+    .callout.success { border-color: var(--success); background: #eaf8f1; }
+    .callout strong { display: block; margin-bottom: .2rem; }
+    .table-wrap { overflow-x: auto; margin: 1rem 0; }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td { padding: .72rem .78rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { background: var(--surface-alt); font-weight: 700; }
+    tbody tr:nth-child(even) { background: rgba(110, 86, 207, .035); }
+    .steps { counter-reset: item; list-style: none; padding: 0; }
+    .steps > li { position: relative; min-height: 3rem; padding: 0 0 1.2rem 3.3rem; }
+    .steps > li::before {
+      counter-increment: item; content: counter(item); position: absolute; left: 0; top: -.15rem;
+      width: 2.25rem; height: 2.25rem; display: grid; place-items: center;
+      border-radius: 50%; background: var(--brand); color: white; font-weight: 800;
+    }
+    .steps > li:not(:last-child)::after { content: ""; position: absolute; left: 1.1rem; top: 2.15rem; bottom: -.1rem; width: 2px; background: var(--border); }
+    .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: .55rem; margin: 1rem 0; }
+    .flow span { flex: 1 1 140px; padding: .7rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-alt); text-align: center; font-size: .86rem; font-weight: 650; }
+    .flow b { align-self: center; color: var(--brand); }
+    .tag { display: inline-block; padding: .14rem .5rem; border-radius: 999px; font-size: .76rem; font-weight: 800; letter-spacing: .03em; }
+    .tag.success { color: #075c37; background: #d9f3e7; }
+    .tag.warning { color: #744300; background: #ffebbd; }
+    .tag.failed { color: #8e1711; background: #ffdcd9; }
+    .tag.na { color: #525866; background: #e7e9ed; }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li { position: relative; padding-left: 1.7rem; }
+    .checklist li::before { content: "✓"; position: absolute; left: 0; color: var(--success); font-weight: 900; }
+    .muted { color: var(--muted); }
+    .small { font-size: .86rem; }
+    footer { padding: 2rem; text-align: center; color: var(--muted); font-size: .84rem; }
+    @media (max-width: 980px) {
+      .layout { display: block; }
+      .sidebar { position: relative; height: auto; border-right: 0; }
+      .sidebar nav { columns: 2; }
+      .sidebar details { break-inside: avoid; }
+      .grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 680px) {
+      .sidebar nav { columns: 1; }
+      .grid, .grid.three { grid-template-columns: 1fr; }
+      .content { width: min(100% - 1.2rem, 1120px); }
+      .hero { padding-left: 1.2rem; padding-right: 1.2rem; }
+      section { padding: 1.1rem; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121318; --surface: #1b1c22; --surface-alt: #26232f; --text: #f0f1f4;
+        --muted: #b0b3bd; --border: #363842; --brand: #9988ed; --brand-strong: #b8aafa;
+        --brand-soft: #332d4a; --shadow: 0 12px 30px rgba(0,0,0,.18);
+      }
+      .callout { background: #182a3c; }
+      .callout.warning { background: #382b13; }
+      .callout.danger { background: #3a1e20; }
+      .callout.success { background: #173225; }
+      .tag.success { color: #a4e6c8; background: #17402e; }
+      .tag.warning { color: #ffda8a; background: #4b3510; }
+      .tag.failed { color: #ffb4ae; background: #4a2322; }
+      .tag.na { color: #d2d4dc; background: #3a3c44; }
+    }
+    @media print {
+      :root { --bg: white; --surface: white; --text: black; --muted: #444; --border: #bbb; --shadow: none; }
+      .layout { display: block; }
+      .sidebar, .hero-actions { display: none; }
+      .hero { padding: 1.2cm 0; background: white; color: black; border-bottom: 2px solid #444; }
+      .hero .lede, .hero .eyebrow, .pill { color: black; border-color: #777; }
+      .content { width: 100%; padding: 0; }
+      section { break-inside: avoid-page; margin: .5cm 0; padding: .5cm 0; border: 0; border-radius: 0; }
+      a { color: black; text-decoration: none; }
+      pre { white-space: pre-wrap; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" aria-label="Documentation navigation">
+    <div class="brand">
+      <div class="brand-mark">V</div>
+      <div><strong>Restore Tester</strong><small>Documentation · 1.2.4</small></div>
+    </div>
+    <nav>
+      <a href="#overview">Overview</a>
+      <a href="#audience">Choose your path</a>
+      <details open>
+        <summary>Operate</summary>
+        <a href="#prerequisites">Prerequisites</a>
+        <a href="#deployment">Deployment</a>
+        <a href="#first-run">First run</a>
+        <a href="#ui-guide">Interface guide</a>
+        <a href="#multi-job">Multi-job tests</a>
+        <a href="#reports">Reports and evidence</a>
+      </details>
+      <details>
+        <summary>Understand</summary>
+        <a href="#architecture">Architecture</a>
+        <a href="#discovery">Discovery and search</a>
+        <a href="#engine">PowerShell engine</a>
+        <a href="#sampling">Sample validation</a>
+        <a href="#aggregation">Aggregation</a>
+        <a href="#status-model">Status model</a>
+        <a href="#storage">Storage lifecycle</a>
+      </details>
+      <details>
+        <summary>Maintain</summary>
+        <a href="#components">Component reference</a>
+        <a href="#configuration">Configuration</a>
+        <a href="#development">Development</a>
+        <a href="#packaging">Packaging</a>
+        <a href="#testing">Testing</a>
+        <a href="#security">Security</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#limitations">Limits</a>
+        <a href="#sources">Sources</a>
+      </details>
+    </nav>
+    <div class="sidebar-footer">Self-contained HTML · works offline · print-friendly<br>Last updated: 21 September 2026</div>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">Operator + maintainer manual</div>
+      <h1>Veeam M365<br>Restore Tester</h1>
+      <p class="lede">A complete guide to deploying, operating and maintaining the Windows desktop application that verifies representative Veeam Backup for Microsoft 365 restores through local, non-destructive evidence extraction.</p>
+      <div class="hero-meta">
+        <span class="pill">Version 1.2.4</span>
+        <span class="pill">Windows</span>
+        <span class="pill">Python 3.12 + PySide6</span>
+        <span class="pill">PowerShell 7 + VB365</span>
+      </div>
+      <div class="hero-actions">
+        <a class="button" href="#deployment">Deploy the application</a>
+        <a class="button secondary" href="#architecture">Understand the architecture</a>
+      </div>
+    </header>
+
+    <div class="content">
+      <section id="overview">
+        <div class="eyebrow">Purpose</div>
+        <h2>What the application does</h2>
+        <p>Veeam M365 Restore Tester turns a repeatable backup-restore verification script into an operator-friendly desktop workflow. It connects to the Veeam Backup for Microsoft 365 service installed on the same machine, discovers organizations and jobs, lets the operator queue one or many tests, and restores representative Exchange, OneDrive and SharePoint items to local storage.</p>
+        <p>A file is accepted as evidence only after it exists, is larger than zero bytes and can be hashed with SHA-256. The application then groups job outcomes by organization and writes an internal JSON record plus the selected client-facing documents.</p>
+        <div class="grid three">
+          <div class="card"><h3>Non-destructive</h3><p>Samples are exported locally. Nothing is restored into Microsoft 365 and tenant content is not modified.</p></div>
+          <div class="card"><h3>Evidence-oriented</h3><p>Every accepted sample has file metadata and a SHA-256 hash, with structured job and workload outcomes.</p></div>
+          <div class="card"><h3>Multi-job</h3><p>Selected organization/job pairs are isolated and processed sequentially, then summarized per organization.</p></div>
+        </div>
+        <div class="callout warning">
+          <strong>Interpret the result correctly</strong>
+          This is a representative sampling test, not an exhaustive restore of every protected item. A successful result demonstrates that selected content could be opened and exported from the tested restore point under the conditions of that run.
+        </div>
+      </section>
+
+      <section id="audience">
+        <div class="eyebrow">Navigation</div>
+        <h2>Choose the path that matches your task</h2>
+        <div class="grid">
+          <div class="card"><h3>Operator</h3><p>Read <a href="#prerequisites">Prerequisites</a>, <a href="#deployment">Deployment</a>, <a href="#first-run">First run</a> and <a href="#reports">Reports</a>. Use Troubleshooting when a run does not behave as expected.</p></div>
+          <div class="card"><h3>System administrator</h3><p>Focus on deployment validation, UAC, PowerShell/Veeam availability, storage permissions, configuration, evidence protection and retention.</p></div>
+          <div class="card"><h3>Developer or maintainer</h3><p>Start with Architecture, Component reference, data/status contracts, Development, Packaging and Testing.</p></div>
+          <div class="card"><h3>Auditor or customer</h3><p>Review What the application does, sample validation, status semantics, report boundaries and security/privacy considerations.</p></div>
+        </div>
+      </section>
+
+      <section id="prerequisites">
+        <div class="eyebrow">Before installation</div>
+        <h2>Prerequisites</h2>
+        <p>The application is not a remote SaaS console. It is designed to run in the Windows environment where the Veeam PowerShell module and Explorer components can operate against the local VB365 service.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Requirement</th><th>Required for</th><th>How to validate</th></tr></thead>
+          <tbody>
+            <tr><td>Windows 10/11 or Windows Server 2016+</td><td>Desktop application, Qt and Veeam tools.</td><td>Run <code>winver</code>.</td></tr>
+            <tr><td>Veeam Backup for Microsoft 365 8.x/8.6</td><td>Organizations, jobs, restore points and sessions.</td><td>Open the Veeam console and confirm the local server is healthy.</td></tr>
+            <tr><td>Veeam PowerShell module</td><td><code>Get-VBOOrganization</code>, <code>Get-VBOJob</code>, backup and restore point cmdlets.</td><td><code>Get-Module -ListAvailable Veeam.Archiver.PowerShell</code></td></tr>
+            <tr><td>Relevant Veeam Explorers</td><td>Exchange, OneDrive and SharePoint restore sessions.</td><td>Confirm their cmdlets are available after importing the module.</td></tr>
+            <tr><td>PowerShell 7 in <code>PATH</code></td><td>All child automation.</td><td><code>pwsh.exe --version</code></td></tr>
+            <tr><td>Administrator approval</td><td>The packaged executable requests elevation at startup.</td><td>Start the executable and approve UAC.</td></tr>
+            <tr><td>Writable local restore root</td><td>Temporary exports, final evidence and reports.</td><td>Create/delete a test file under the chosen root as the operating account.</td></tr>
+            <tr><td>Enough local disk space</td><td>Restored samples and temporary job output.</td><td>Size depends on selected samples/jobs; monitor the volume before large batches.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="callout"><strong>Python is not a target-machine prerequisite</strong>The portable folder includes Python, PySide6, Qt and the PDF rendering runtime. Python 3.12 is needed only when running or building from source.</div>
+      </section>
+
+      <section id="deployment">
+        <div class="eyebrow">Step-by-step</div>
+        <h2>Deploy on a Veeam machine</h2>
+        <ol class="steps">
+          <li><strong>Obtain a trusted package.</strong><br>Clone/download the repository or receive the portable folder from your controlled build process. When using the tracked executable from Git, Git LFS must materialize the real binary rather than a pointer.</li>
+          <li><strong>Keep the portable folder intact.</strong><br>The recommended fast-start distributable consists of <code>VeeamM365RestoreTester.exe</code> and its adjacent <code>_internal</code> directory. ZIP and transfer the whole directory. The repository's compatibility one-file EXE is standalone but starts more slowly.</li>
+          <li><strong>Place it in a stable local directory.</strong><br>Do not run directly from inside a ZIP or a transient email/download preview. A locally extracted folder also avoids network-zone and performance issues.</li>
+          <li><strong>Verify integrity.</strong><br>Calculate SHA-256 and compare it with the release value from the repository or your organization's release record.</li>
+          <li><strong>Validate PowerShell and Veeam.</strong><br>Open PowerShell 7 and run the checks below before launching the GUI.</li>
+          <li><strong>Start the executable.</strong><br>Approve the UAC prompt. The application should show “PowerShell 7 ready” and “Administrator” in its shell status area.</li>
+          <li><strong>Confirm inventory.</strong><br>The Run test page should display organizations and their jobs. If it does not, use the troubleshooting entries for discovery/module/connection failures.</li>
+          <li><strong>Run a controlled acceptance test.</strong><br>Begin with one known test job and <em>Don't run backup jobs</em> enabled. Verify the JSON, an enabled client report and the evidence folder before expanding use.</li>
+        </ol>
+        <pre><code># Runtime prerequisites
+pwsh.exe --version
+pwsh.exe -NoProfile -Command "Get-Module -ListAvailable Veeam.Archiver.PowerShell"
+
+# Verify the packaged launcher
+Get-FileHash .\VeeamM365RestoreTester.exe -Algorithm SHA256</code></pre>
+        <div class="callout danger"><strong>Do not distribute the EXE by itself</strong>The small launcher depends on DLLs, Python modules, Qt plugins, Chromium/WebEngine helpers, scripts and assets stored in <code>_internal</code>. If the folder is missing or incomplete, startup or PDF rendering will fail.</div>
+      </section>
+
+      <section id="first-run">
+        <div class="eyebrow">Operator workflow</div>
+        <h2>Run the first restore verification</h2>
+        <ol class="steps">
+          <li><strong>Open Run test.</strong> Wait for the read-only organization/job inventory. Refresh only when Veeam configuration changed or discovery previously failed.</li>
+          <li><strong>Find and select jobs.</strong> Type any part of an organization or job name. Check individual jobs, a whole organization, or use <em>Select visible</em>.</li>
+          <li><strong>Review the selection summary.</strong> Search can hide checked rows, so confirm the total selected job/organization count before running.</li>
+          <li><strong>Choose the restore root.</strong> The default is <code>C:\VeeamRestoreLocalTest</code>. Use a local volume with suitable capacity and access controls.</li>
+          <li><strong>Choose backup behavior.</strong> Keep <em>Don't run backup jobs</em> checked for a faster test of existing restore points. Clear it only when you intend to execute every selected backup job first.</li>
+          <li><strong>Start the queue.</strong> The setup controls become read-only during execution. Watch current job, phase, elapsed time and live log.</li>
+          <li><strong>Review completion.</strong> Inspect overall status and each workload. Open the final organization directory and confirm requested report formats.</li>
+        </ol>
+        <div class="callout warning"><strong>Backup mode changes real Veeam state</strong>Discovery and restore extraction are read-only relative to tenant data, but clearing <em>Don't run backup jobs</em> calls <code>Start-VBOJob</code> for each selected job.</div>
+      </section>
+
+      <section id="ui-guide">
+        <div class="eyebrow">Interface reference</div>
+        <h2>What each page does</h2>
+        <div class="grid">
+          <div class="card"><h3>Dashboard</h3><p>Shows the newest accepted final JSON report, aggregate outcome and representative Exchange/OneDrive/SharePoint details. It is a summary surface, not a test configuration page.</p></div>
+          <div class="card"><h3>Run test</h3><p>The primary operating page. It owns discovery, search, selection, restore root, backup behavior, queue controls, phase, timer and live output.</p></div>
+          <div class="card"><h3>Reports</h3><p>Scans final report folders, lists history by modification time, displays English outcomes and internal duration, and opens final folders or available TXT/HTML/PDF documents.</p></div>
+          <div class="card"><h3>Settings</h3><p>Stores operational defaults: restore root, per-organization retention, default use of existing restore points, report formats and an advanced custom script path.</p></div>
+        </div>
+        <h3>Run test search behavior</h3>
+        <ul>
+          <li>Matching is case-insensitive and uses Unicode-aware <code>casefold()</code>.</li>
+          <li>If the organization name matches, all jobs beneath it remain visible.</li>
+          <li>If only job names match, the parent organization plus matching jobs are visible.</li>
+          <li>Filtering does not reconnect to Veeam, rebuild the tree or change checks.</li>
+          <li><em>Select visible</em>/<em>Clear visible</em> modify only visible job rows; hidden selections remain selected.</li>
+          <li>Clearing the query restores all inventory rows and preserved state.</li>
+        </ul>
+      </section>
+
+      <section id="multi-job">
+        <div class="eyebrow">Execution semantics</div>
+        <h2>Multi-organization and multi-job tests</h2>
+        <p>Checked rows are flattened into ordered <code>PendingJob(org_name, job_name)</code> records. The queue is serial: after one PowerShell child exits, its result is collected and the next child begins. The application never runs two selected Veeam restore tests concurrently.</p>
+        <div class="flow" aria-label="Multi-job flow">
+          <span>Checked tree</span><b>→</b><span>PendingJob queue</span><b>→</b><span>One QProcess</span><b>→</b><span>Collect result</span><b>→</b><span>Next job</span><b>→</b><span>Group by org</span>
+        </div>
+        <h3>Isolation rules</h3>
+        <ul>
+          <li>Each pair receives <code>Batch_&lt;timestamp&gt;\Jobs\&lt;safe-org&gt;\&lt;safe-job&gt;</code>.</li>
+          <li>Organization and job names are passed as separate process arguments.</li>
+          <li>A discovered report is accepted only when its job name matches and it was produced after that job started.</li>
+          <li>Completed records retain organization, job, exit code, report path, parsed report and measured seconds.</li>
+          <li>Final aggregation partitions completed records by organization before creating client output.</li>
+        </ul>
+        <h3>Why execution is sequential</h3>
+        <p>Veeam backup jobs and Explorer restore sessions can consume significant local resources. Serial processing avoids session contention, prevents interleaved evidence, simplifies interruption and makes the live log attributable to exactly one queue item. The trade-off is elapsed time: a batch duration is approximately the sum of its job durations plus reporting overhead.</p>
+        <h3>Stop behavior</h3>
+        <p>Stop requires confirmation. Pending items are cleared, the active PowerShell process receives a terminate request, and the app waits up to 2.5 seconds before forcing a kill. Already generated temporary files may remain if a run is interrupted; they are not presented as a completed final report unless final aggregation succeeds.</p>
+      </section>
+
+      <section id="reports">
+        <div class="eyebrow">Evidence</div>
+        <h2>Reports and output</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Artifact</th><th>Audience</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td><code>Report_Summary.json</code></td><td>Application, operations, audit automation</td><td>Always generated. Source of truth for Dashboard/Reports; contains detailed job records and <code>DurationSeconds</code>.</td></tr>
+            <tr><td><code>Report_Summary.txt</code></td><td>Operator/client</td><td>Optional concise human-readable outcome and per-job list.</td></tr>
+            <tr><td><code>Report_Summary.html</code></td><td>Client/management</td><td>Optional branded, self-contained document with embedded images and CSS.</td></tr>
+            <tr><td><code>Report_Summary.pdf</code></td><td>Client/archival</td><td>Optional A4 rendering of the client model through bundled Qt WebEngine/Chromium.</td></tr>
+            <tr><td>Workload folders</td><td>Technical validation</td><td>Contain copied representative evidence when a usable sample exists.</td></tr>
+          </tbody>
+        </table></div>
+        <p>The internal/client boundary is explicit: Python deep-copies the final model and removes <code>DurationSeconds</code> before TXT/HTML/PDF generation. Duration remains in JSON and the Reports UI, as requested, without appearing in the final client document.</p>
+        <h3>Default final layout</h3>
+        <pre><code>C:\VeeamRestoreLocalTest\
+└── contoso.onmicrosoft.com\
+    └── RestoreTest_20260921_112629\
+        ├── Report_Summary.json
+        ├── Report_Summary.txt
+        ├── Report_Summary.html
+        ├── Report_Summary.pdf
+        ├── restore email\
+        ├── restore one drive\
+        └── restore share point\</code></pre>
+        <div class="callout"><strong>Report history is filesystem-backed</strong>The Reports page rescans <code>Report_Summary.json</code> below the configured root. Moving or deleting a final directory removes it from that history; copying a valid final directory under the root can make it visible.</div>
+      </section>
+
+      <section id="architecture">
+        <div class="eyebrow">Technical design</div>
+        <h2>Architecture and process boundaries</h2>
+        <p>The design separates user interaction, orchestration and Veeam-specific automation. Python never imports the Veeam module. PowerShell never owns the desktop interface or final cross-job history.</p>
+        <pre><code>Operator
+  │
+  ▼
+MainWindow / RunPage ───────────────────────────────────────────┐
+  │                                                            │
+  ├── InventoryDiscovery (QProcess)                             │
+  │       └── Get-VeeamM365Inventory.ps1 ──► local VB365       │
+  │                                                            │
+  ├── PowerShellRunner (QProcess, one job at a time)            │
+  │       └── Invoke-SimpleM365BackupRestoreTest.ps1            │
+  │              ├── backup/restore cmdlets                    │
+  │              └── RestoreSampleHelpers.ps1                  │
+  │                                                            │
+  └── batch_report / reports / retention / HTML / PDF ◄────────┘</code></pre>
+        <div class="grid three">
+          <div class="card"><h3>UI layer</h3><p><code>app.py</code> and <code>ui/</code> render state and collect user intent. They do not call Veeam cmdlets directly.</p></div>
+          <div class="card"><h3>Core layer</h3><p><code>core/</code> owns process adapters, paths, configuration, aggregation, reports and retention.</p></div>
+          <div class="card"><h3>Automation layer</h3><p><code>scripts/</code> owns local Veeam discovery, backup and workload-specific extraction.</p></div>
+        </div>
+        <h3>Responsiveness</h3>
+        <p>Both discovery and job execution use Qt <code>QProcess</code>. Qt signals deliver output and completion back to the event loop; the main UI thread is not blocked waiting for PowerShell. The elapsed clock uses a monotonic source so system clock adjustments cannot make a run duration move backward or jump.</p>
+        <h3>Resource resolution</h3>
+        <p><code>core.paths.resource_path()</code> selects the source repository root during development or PyInstaller's runtime resource root when packaged. Unless Settings specifies a trusted custom engine, the canonical embedded script is resolved from <code>scripts/</code>.</p>
+      </section>
+
+      <section id="discovery">
+        <div class="eyebrow">Inventory</div>
+        <h2>Discovery, parsing and search</h2>
+        <ol>
+          <li><code>InventoryDiscovery</code> starts PowerShell 7 with no profile and the bundled inventory script.</li>
+          <li>The script verifies/imports <code>Veeam.Archiver.PowerShell</code>, connects to <code>localhost</code> and enumerates sorted organizations.</li>
+          <li>For each organization, it prefers <code>Get-VBOJob -Organization</code> and contains a compatibility fallback that filters the global job list by organization identity.</li>
+          <li>It writes one compressed JSON payload prefixed with <code>__VEEAM_INVENTORY__</code> and disconnects in <code>finally</code>.</li>
+          <li>Python scans output from the end, parses only the marked line and requires an object containing an <code>Organizations</code> array.</li>
+          <li>The tree loads current inventory and reapplies valid persisted checks.</li>
+        </ol>
+        <pre><code>__VEEAM_INVENTORY__{
+  "Server": "localhost",
+  "Organizations": [
+    {
+      "Name": "contoso.onmicrosoft.com",
+      "Id": "...",
+      "Jobs": [{ "Name": "M365 Backup", "Id": "..." }]
+    }
+  ]
+}</code></pre>
+        <p>Marker framing is important: Veeam or PowerShell may emit informational text around structured output. The parser does not mistake that text for inventory JSON.</p>
+      </section>
+
+      <section id="engine">
+        <div class="eyebrow">One queued job</div>
+        <h2>PowerShell backup and restore engine</h2>
+        <p>The engine receives a single organization/job pair. It creates a timestamped run directory, imports the module, connects locally and verifies that the named organization and job exist before doing any backup or restore work.</p>
+        <h3>Mode A: existing restore point</h3>
+        <p>When the GUI passes <code>-SkipBackup</code>, the engine records <code>SkippedByUser</code> and proceeds directly to the latest available restore point lookup for the selected job. This mode is faster and avoids starting a production backup job.</p>
+        <h3>Mode B: backup then restore</h3>
+        <p>Without <code>-SkipBackup</code>, the engine calls <code>Start-VBOJob</code>, remembers the start time/session, polls until completion and validates the final backup status. Only then does it obtain a restore point and begin sample extraction.</p>
+        <div class="callout"><strong>Restore points stay job-bound</strong>The lookup is <code>Get-VBORestorePoint -Job $job -Latest</code>. If the selected job has no restore point, that queue item fails clearly. The engine does not fall back to the newest restore point of the organization, because it could belong to another job.</div>
+        <h3>Restore sessions</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Workload</th><th>Session</th><th>Selection path</th><th>Evidence</th></tr></thead>
+          <tbody>
+            <tr><td>Exchange</td><td><code>Start-VBOExchangeItemRestoreSession</code></td><td>Database → eligible mailbox → folder/message candidates</td><td>Exported message file, size and SHA-256</td></tr>
+            <tr><td>OneDrive</td><td><code>Start-VEODRestoreSession</code></td><td>User → documents; folders and extensionless container-like objects excluded</td><td>Exported regular file, size and SHA-256</td></tr>
+            <tr><td>SharePoint</td><td><code>Start-VBOSharePointItemRestoreSession</code></td><td>Explorer organization → site → library → documents; folders excluded</td><td>Exported regular file, size and SHA-256</td></tr>
+          </tbody>
+        </table></div>
+        <p>Each Explorer session is closed in cleanup logic even when enumeration or export fails. Missing/unprotected workloads are represented as <code>NOT CONFIGURED</code> when the error matches the expected absence cases; candidates that exist but all fail validation remain a genuine failure.</p>
+      </section>
+
+      <section id="sampling">
+        <div class="eyebrow">Resilience</div>
+        <h2>How a sample becomes valid evidence</h2>
+        <p>Random selection alone is insufficient because Explorer APIs can return folder containers, stale items or objects that export to an empty result. <code>RestoreSampleHelpers.ps1</code> uses an isolated, bounded verification pipeline.</p>
+        <ol class="steps">
+          <li><strong>Filter.</strong> Reject null items, blank names and objects whose <code>IsContainer</code> or <code>IsFolder</code> property is true. OneDrive can additionally require a filename extension.</li>
+          <li><strong>Randomize.</strong> Shuffle eligible candidates so repeated tests do not always prove the same object.</li>
+          <li><strong>Bound.</strong> Attempt no more than <code>MaxSampleAttempts</code> candidates (default 25, accepted 1–1000).</li>
+          <li><strong>Isolate.</strong> Export one candidate into its own temporary attempt directory.</li>
+          <li><strong>Inspect.</strong> Recursively find regular files and keep only files larger than zero bytes.</li>
+          <li><strong>Copy safely.</strong> Copy the largest valid output into the workload evidence directory; add a short GUID suffix if a name already exists.</li>
+          <li><strong>Verify.</strong> Recheck final size and calculate SHA-256 from the final copy.</li>
+          <li><strong>Clean.</strong> Delete each attempt directory and the temporary workspace whether the attempt passed or failed.</li>
+        </ol>
+        <div class="callout success"><strong>Empty folders no longer decide the workload result</strong>A folder-like candidate is rejected before export. If an object still exports no non-empty file, the helper logs a warning and tries another candidate until success, candidate exhaustion or the configured attempt limit.</div>
+      </section>
+
+      <section id="aggregation">
+        <div class="eyebrow">Finalization</div>
+        <h2>Aggregation and organization isolation</h2>
+        <p>When the queue finishes, <code>build_organization_summaries()</code> preserves job order but partitions records by organization. Duration for an organization is the sum of its measured job durations. Each organization receives a separate final directory and report set.</p>
+        <p>For each workload, the summary prefers the first successful structured result from that organization's jobs. If there is no successful result, it retains the first available workload record so errors or not-configured information are not lost. Evidence copy then tries final representative paths and per-job report paths, taking only existing files.</p>
+        <h3>Finalization order</h3>
+        <ol>
+          <li>Create the safe organization and <code>RestoreTest_*</code> directory.</li>
+          <li>Copy representative workload evidence and update final <code>LocalFile</code> paths.</li>
+          <li>Write mandatory JSON.</li>
+          <li>Write enabled TXT, HTML and PDF formats.</li>
+          <li>Apply retention to that organization.</li>
+          <li>After all organization JSON files exist, remove the temporary batch tree.</li>
+          <li>Refresh Dashboard and Reports.</li>
+        </ol>
+      </section>
+
+      <section id="status-model">
+        <div class="eyebrow">Interpretation</div>
+        <h2>Status and exit-code model</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Canonical status</th><th>Interpretation</th><th>Typical operator action</th></tr></thead>
+          <tbody>
+            <tr><td><span class="tag success">SUCCESS</span></td><td>Validated usable evidence exists and the evaluated result has no contradictory workload failure.</td><td>Review/store evidence according to policy.</td></tr>
+            <tr><td><span class="tag warning">WARNING</span></td><td>Some usable evidence exists but the aggregate is partial, mixed or otherwise requires attention.</td><td>Read per-job/workload details; rerun or investigate failed workload.</td></tr>
+            <tr><td><span class="tag failed">FAILED</span></td><td>No acceptable successful evidence could be established or a hard process/job failure occurred.</td><td>Use live log, per-job report and Troubleshooting.</td></tr>
+            <tr><td><span class="tag na">NOT CONFIGURED</span></td><td>The workload is absent or not protected for that job/restore point.</td><td>Confirm this is expected in Veeam job scope.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Legacy labels such as <code>SUCCESSO</code>, <code>FALLITO</code>, <code>ATTENZIONE</code> and underscore variants are normalized before display. The application evaluates structured workload evidence as well as exit code, because a non-zero code can coexist with valid partial evidence. The JSON <code>AllSuccessful</code> boolean remains the strict success signal.</p>
+      </section>
+
+      <section id="storage">
+        <div class="eyebrow">Filesystem</div>
+        <h2>Storage lifecycle and retention</h2>
+        <h3>Temporary staging</h3>
+        <pre><code>&lt;root&gt;\Batch_YYYYMMDD_HHMMSS\
+└── Jobs\
+    └── &lt;safe-organization&gt;\
+        └── &lt;safe-job&gt;\
+            └── RestoreTest_...\per-job output</code></pre>
+        <h3>Final storage</h3>
+        <pre><code>&lt;root&gt;\&lt;safe-organization&gt;\RestoreTest_YYYYMMDD_HHMMSS\...</code></pre>
+        <p>Names are sanitized to letters, numbers, dots, underscores and hyphens. Retention considers only direct child directories that exactly match <code>RestoreTest_\d{8}_\d{6}</code>. It sorts by timestamped name, clamps the minimum keep count to one, and deletes the oldest until the configured limit is satisfied.</p>
+        <div class="callout warning"><strong>Retention is deletion</strong>Completed evidence older than the configured per-organization count is recursively removed and is not sent to the Recycle Bin. If evidence must be preserved for audit, archive it outside the managed restore root or set an appropriate limit before running new tests.</div>
+      </section>
+
+      <section id="components">
+        <div class="eyebrow">Reference</div>
+        <h2>Component-by-component responsibilities</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>File/component</th><th>Role</th><th>Important behavior</th></tr></thead>
+          <tbody>
+            <tr><td><code>main.py</code></td><td>Qt entry point</td><td>Creates the application, sets identity/Fusion style/icon/font and opens <code>MainWindow</code>.</td></tr>
+            <tr><td><code>app.py · MainWindow</code></td><td>Application shell</td><td>Owns shared config/runner, navigation, status, page refresh and close protection.</td></tr>
+            <tr><td><code>app.py · RunPage</code></td><td>Workflow orchestrator</td><td>Discovery, selection, queue, process lifecycle, elapsed timer, aggregation and cleanup.</td></tr>
+            <tr><td><code>app.py · DashboardPage</code></td><td>Latest result</td><td>Maps final JSON to top-level workload cards.</td></tr>
+            <tr><td><code>app.py · ReportsPage</code></td><td>History browser</td><td>Lists accepted final JSON and opens folders or optional documents.</td></tr>
+            <tr><td><code>app.py · SettingsPage</code></td><td>Operational defaults</td><td>Persists storage, retention, backup default, output formats and trusted engine override.</td></tr>
+            <tr><td><code>ui/widgets.py</code></td><td>Reusable UI</td><td>Heading, workload status, colored log and selection-preserving org/job tree.</td></tr>
+            <tr><td><code>ui/dialogs.py</code></td><td>Decision surfaces</td><td>Consistent confirmation, information, warning, error and success dialogs.</td></tr>
+            <tr><td><code>ui/theme.py</code></td><td>Visual system</td><td>Central Qt stylesheet for navigation, controls, typography and states.</td></tr>
+            <tr><td><code>core/config.py</code></td><td>Settings</td><td>Whitelists keys, tolerates invalid files and writes with atomic replacement.</td></tr>
+            <tr><td><code>core/paths.py</code></td><td>Runtime resources</td><td>Resolves source/packaged files and locates PowerShell 7.</td></tr>
+            <tr><td><code>core/discovery.py</code></td><td>Inventory adapter</td><td>Async QProcess plus marker-based JSON validation.</td></tr>
+            <tr><td><code>core/runner.py</code></td><td>Engine adapter</td><td>Builds argument list, merges output, derives log levels/phases and controls stop.</td></tr>
+            <tr><td><code>core/batch_report.py</code></td><td>Aggregation</td><td>English statuses, per-org summaries, evidence copy, output formats and retention trigger.</td></tr>
+            <tr><td><code>core/reports.py</code></td><td>History parser</td><td>Reads valid JSON, limits scan depth, sorts by mtime and formats sizes/durations.</td></tr>
+            <tr><td><code>core/retention.py</code></td><td>Lifecycle policy</td><td>Exact directory matching, safe org names and oldest-first deletion.</td></tr>
+            <tr><td><code>core/html_report.py</code></td><td>Client HTML</td><td>Self-contained branded output with embedded visual assets.</td></tr>
+            <tr><td><code>core/pdf_report.py</code></td><td>Client PDF</td><td>Qt WebEngine A4 rendering with event loop and 30-second timeout.</td></tr>
+            <tr><td><code>Get-VeeamM365Inventory.ps1</code></td><td>Read-only inventory</td><td>Local connect, sorted org/job enumeration, marked JSON, guaranteed disconnect attempt.</td></tr>
+            <tr><td><code>Invoke-SimpleM365BackupRestoreTest.ps1</code></td><td>Per-job engine</td><td>Preflight, optional backup, restore sessions, workload results and per-job reports.</td></tr>
+            <tr><td><code>RestoreSampleHelpers.ps1</code></td><td>Evidence verifier</td><td>Container rejection, randomized bounded retries, non-zero check, safe copy, SHA-256.</td></tr>
+            <tr><td><code>build.ps1</code></td><td>Release build</td><td>Clean UAC-aware PyInstaller onedir package with scripts/assets.</td></tr>
+            <tr><td><code>tests/test_core.py</code></td><td>Regression suite</td><td>Core, report, search/selection, Qt and cleanup behavior without live Veeam.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="configuration">
+        <div class="eyebrow">Settings contract</div>
+        <h2>Configuration</h2>
+        <p>The file is stored at <code>%APPDATA%\VeeamM365RestoreTester\settings.json</code>. Loading starts from defaults and applies only known keys. Unknown legacy fields are ignored. Saving writes UTF-8 JSON to <code>settings.tmp</code> and atomically replaces the destination, reducing corruption risk from interruption.</p>
+        <pre><code>{
+  "selected_multi_org_jobs": {
+    "contoso.onmicrosoft.com": ["M365 Backup"]
+  },
+  "restore_root": "C:\\VeeamRestoreLocalTest",
+  "script_path": "",
+  "max_restore_tests": 5,
+  "skip_backups": true,
+  "report_formats": ["txt", "html", "pdf"]
+}</code></pre>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Key</th><th>Meaning</th><th>Operational note</th></tr></thead>
+          <tbody>
+            <tr><td><code>selected_multi_org_jobs</code></td><td>Last checked job names by org.</td><td>Convenience only; inventory is rediscovered and remains authoritative.</td></tr>
+            <tr><td><code>restore_root</code></td><td>Managed output root.</td><td>Use a local controlled path with adequate space.</td></tr>
+            <tr><td><code>script_path</code></td><td>Optional engine override.</td><td>Empty uses the bundled script. A custom path runs elevated code; trust it explicitly.</td></tr>
+            <tr><td><code>max_restore_tests</code></td><td>Final tests kept per org.</td><td>Minimum effective value is one.</td></tr>
+            <tr><td><code>skip_backups</code></td><td>Default Run test checkbox.</td><td>Can be changed per run without changing Settings.</td></tr>
+            <tr><td><code>report_formats</code></td><td>Optional client outputs.</td><td>JSON is always produced independently.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="development">
+        <div class="eyebrow">Source workflow</div>
+        <h2>Develop and run from source</h2>
+        <h3>Repository layout</h3>
+        <pre><code>.
+├── app.py                  pages and workflow orchestration
+├── main.py                 desktop entry point
+├── core\                   process/report/configuration services
+├── ui\                     widgets, dialogs and theme
+├── scripts\                canonical PowerShell automation
+├── assets\                 packaged icons, navigation and report branding
+├── docs\                   this manual and architecture reference
+├── examples\               screenshots and sample reports
+├── tests\                  regression suite
+├── tools\                  screenshot/icon maintenance utilities
+├── build.ps1               portable build command
+├── requirements.txt        pinned Python dependencies
+└── version_info.txt        Windows product/file version metadata</code></pre>
+        <h3>Environment</h3>
+        <pre><code>python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python main.py</code></pre>
+        <p>The pinned requirements install PySide6 6.9.2 and PyInstaller 6.16.0. Tests also require pytest in the development environment. Source execution still needs PowerShell/Veeam only when discovery or real restore execution is attempted.</p>
+        <h3>PowerShell engine without GUI</h3>
+        <pre><code>pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\Invoke-SimpleM365BackupRestoreTest.ps1 `
+  -OrganizationName "contoso.onmicrosoft.com" `
+  -JobName "M365 Backup" `
+  -LocalRestoreRoot "C:\VeeamRestoreLocalTest" `
+  -SkipBackup `
+  -MaxSampleAttempts 25</code></pre>
+        <p>The canonical engine is under <code>scripts\</code>. The root duplicate exists for compatibility with earlier CLI usage and should remain synchronized when engine code changes.</p>
+      </section>
+
+      <section id="packaging">
+        <div class="eyebrow">Distribution</div>
+        <h2>Build and package</h2>
+        <pre><code>python -m pip install -r requirements.txt
+.\build.ps1</code></pre>
+        <p>The build is clean, windowed, <code>onedir</code> and UAC-aware. It embeds all three PowerShell scripts, icons, navigation/status/checkbox SVGs, workload/logo PNGs and Windows version metadata.</p>
+        <pre><code>dist\VeeamM365RestoreTester\
+├── VeeamM365RestoreTester.exe   small native bootloader/launcher
+└── _internal\                   Python + Qt + app modules + assets + scripts
+    ├── PySide6 / Qt6 libraries
+    ├── QtWebEngineProcess.exe and Chromium resources
+    ├── Python runtime and standard extensions
+    ├── scripts\
+    └── assets\</code></pre>
+        <p>Qt WebEngine accounts for much of the approximately 528 MiB distribution because PDF rendering uses a bundled Chromium engine. In one-folder mode these files are loaded directly. A one-file build would compress them into the EXE and extract them to a temporary directory on each start, increasing startup latency and creating more antivirus scanning work.</p>
+        <h3>Release consistency checklist</h3>
+        <ul class="checklist">
+          <li>Update visible version strings and <code>version_info.txt</code>.</li>
+          <li>Keep canonical/root PowerShell copies synchronized.</li>
+          <li>Run the automated suite and a controlled Veeam acceptance test.</li>
+          <li>Build with <code>--clean</code> and inspect the full portable folder.</li>
+          <li>Launch the packaged EXE, discover inventory and render a PDF.</li>
+          <li>Calculate and publish the launcher SHA-256.</li>
+          <li>Update README/manual release details when behavior changes.</li>
+        </ul>
+      </section>
+
+      <section id="testing">
+        <div class="eyebrow">Verification</div>
+        <h2>Test strategy and confidence boundaries</h2>
+        <pre><code>python -m pytest -q</code></pre>
+        <p>The automated suite verifies deterministic behavior that can run without a live Veeam installation: settings, discovery parsing, tree filtering/check preservation, process arguments, status normalization, multi-organization grouping, evidence copying, report format selection, report history, duration, retention, PDF completion and staging cleanup.</p>
+        <div class="callout warning"><strong>What unit tests cannot prove</strong>They do not prove that a particular Veeam server version, job, restore point, repository object model, permission set or Explorer installation will succeed. “31 passed” validates the application logic covered by those tests, not a production VB365 end-to-end run.</div>
+        <h3>Required live acceptance matrix</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Scenario</th><th>Expected evidence</th></tr></thead>
+          <tbody>
+            <tr><td>Multiple organizations and jobs discovered</td><td>Correct hierarchy, fast search and preserved selections.</td></tr>
+            <tr><td>Two jobs in one organization, <code>-SkipBackup</code></td><td>Sequential logs, correct per-job identity, one organization final report.</td></tr>
+            <tr><td>Jobs from two organizations</td><td>Two isolated final directories/reports; no cross-tenant evidence.</td></tr>
+            <tr><td>Controlled job with backup enabled</td><td>Backup runs/completes before restore session.</td></tr>
+            <tr><td>Empty folders and a later valid document</td><td>Folder/zero-byte attempt skipped; later non-empty item accepted.</td></tr>
+            <tr><td>Unavailable workload</td><td><code>NOT CONFIGURED</code>, not a false successful file.</td></tr>
+            <tr><td>All report formats enabled</td><td>Valid JSON/TXT/HTML/PDF; duration only in JSON/UI.</td></tr>
+            <tr><td>Retention exceeded</td><td>Only oldest matching completed test removed for that organization.</td></tr>
+            <tr><td>Application restart</td><td>Reports page rediscovers final JSON and opens surviving evidence.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section id="security">
+        <div class="eyebrow">Protection</div>
+        <h2>Security, privacy and safety</h2>
+        <ul>
+          <li><strong>Least data movement:</strong> only representative items are extracted, but those items can still contain personal or confidential information.</li>
+          <li><strong>Local destination:</strong> the engine exports to the configured Windows filesystem, not back into Microsoft 365.</li>
+          <li><strong>No GUI credential store:</strong> Veeam connectivity/authentication remains in the installed local environment.</li>
+          <li><strong>Elevated execution:</strong> the packaged process requests administrator privileges. Treat its binary, bundled scripts and custom script setting as privileged code.</li>
+          <li><strong>Execution policy:</strong> the child uses <code>-ExecutionPolicy Bypass</code> for that invocation. Validate release hashes and source provenance rather than relying on local script policy as integrity verification.</li>
+          <li><strong>Metadata exposure:</strong> JSON can include organization/job names, workload identity, local paths, hashes and errors. Client documents intentionally show a simpler model but still require appropriate handling.</li>
+          <li><strong>Filesystem controls:</strong> restrict restore-root ACLs, avoid broad shares, encrypt storage where required and align retention with policy.</li>
+        </ul>
+        <div class="callout danger"><strong>Custom script path</strong>Settings can point the elevated runner to a different PowerShell file. Use this only for reviewed, trusted automation. Do not accept a script path supplied by an untrusted party.</div>
+      </section>
+
+      <section id="troubleshooting">
+        <div class="eyebrow">Diagnosis</div>
+        <h2>Troubleshooting</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Symptom</th><th>Likely cause</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td>“PowerShell 7 not found”</td><td><code>pwsh.exe</code> is absent from the app process <code>PATH</code>.</td><td>Install PowerShell 7, restart the app/session and validate <code>Get-Command pwsh.exe</code>.</td></tr>
+            <tr><td>Inventory fails or is empty</td><td>Module unavailable to PowerShell 7, local VB365 connection failure, insufficient permission or no configured org/jobs.</td><td>Run the inventory script manually in PowerShell 7 and read the complete error.</td></tr>
+            <tr><td>Organizations visible but expected job missing</td><td>Job belongs to another org, Veeam configuration changed, or enumeration compatibility issue.</td><td>Refresh inventory; compare with <code>Get-VBOJob</code> output and organization identity.</td></tr>
+            <tr><td>Search appears to remove selection</td><td>Checked rows are hidden by the current filter.</td><td>Read the selection summary or clear search. Hidden checks are preserved.</td></tr>
+            <tr><td>Backup starts unexpectedly</td><td><em>Don't run backup jobs</em> was cleared or the Settings default was disabled.</td><td>Stop only if safe, then enable the checkbox/default before the next run.</td></tr>
+            <tr><td>Workload reports <code>NOT CONFIGURED</code></td><td>No protected content/session for that workload.</td><td>Confirm the Veeam job scope and restore point contents. This can be expected.</td></tr>
+            <tr><td>Workload fails after many retries</td><td>Candidates were stale, folders, inaccessible or exported no non-empty file.</td><td>Review warnings, validate repository/Explorer access and test a known item manually.</td></tr>
+            <tr><td>JSON exists but PDF is absent</td><td>PDF is disabled or Qt WebEngine rendering failed/timed out.</td><td>Check Settings, preserve <code>_internal</code>, verify WebEngine files and retry on the interactive desktop.</td></tr>
+            <tr><td>Old tests disappear</td><td>Per-organization retention ran.</td><td>Increase retention before future runs or archive required reports outside the managed root.</td></tr>
+            <tr><td><code>Batch_*</code> remains after completion</td><td>Not every organization JSON was written or cleanup encountered a filesystem lock/error.</td><td>Preserve it while investigating; check the live warning and final report count before manual removal.</td></tr>
+            <tr><td>Portable EXE will not start elsewhere</td><td>Only the EXE was copied, `_internal` is incomplete, antivirus quarantined a component, or unsupported host.</td><td>Re-extract the complete ZIP, compare hash/file count and review endpoint-security logs.</td></tr>
+            <tr><td>Startup is slower in a one-file experiment</td><td>Python/Qt/Chromium must be extracted and rescanned every launch.</td><td>Use the supported <code>onedir</code> package and keep it on a local disk.</td></tr>
+          </tbody>
+        </table></div>
+        <h3>Manual inventory diagnostic</h3>
+        <pre><code>pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\Get-VeeamM365Inventory.ps1</code></pre>
+        <h3>Manual restore diagnostic</h3>
+        <p>Run the CLI example from an elevated PowerShell 7 window with one known test organization/job. This separates PowerShell/Veeam failures from GUI orchestration. Use a dedicated restore root while diagnosing.</p>
+      </section>
+
+      <section id="limitations">
+        <div class="eyebrow">Explicit boundaries</div>
+        <h2>Known limits and design trade-offs</h2>
+        <ul>
+          <li>The application samples up to one accepted item per workload, not every item in the restore point.</li>
+          <li>It targets the local VB365 service (<code>localhost</code>); remote-server selection is not implemented.</li>
+          <li>Job execution is sequential by design, so large selections can take a long time.</li>
+          <li>PDF output depends on the large bundled Qt WebEngine/Chromium runtime.</li>
+          <li>Optional HTML/PDF exceptions are intentionally non-fatal after JSON; the operator must confirm required client artifacts.</li>
+          <li>Filesystem-based history has no external database, centralized concurrency or tamper-evident signing.</li>
+          <li>Retention permanently deletes matching old final directories rather than archiving them.</li>
+          <li>Compatibility with Veeam APIs is ultimately validated by live tests on the intended Veeam version and protected workload shapes.</li>
+        </ul>
+      </section>
+
+      <section id="sources">
+        <div class="eyebrow">Method and references</div>
+        <h2>Documentation and technical sources</h2>
+        <p>This manual separates quick-start guidance, task procedures, explanation and reference; states audience and prerequisites; uses copyable examples; declares operational limits; and keeps the README short enough to orient users toward the appropriate detailed path. These choices follow the documentation guidance supplied for the project and additional primary references.</p>
+        <h3>Documentation practice</h3>
+        <ul>
+          <li><a href="https://medium.com/analysts-corner/the-art-of-writing-good-documentation-6e4ce4cd3126">The art of writing good documentation</a></li>
+          <li><a href="https://github.blog/developer-skills/documentation-done-right-a-developers-guide/">GitHub · Documentation done right: A developer's guide</a></li>
+          <li><a href="https://www.reddit.com/r/dataengineering/comments/126m46x/what_are_some_best_and_worst_practices_for/">Data Engineering community discussion · documentation practices</a></li>
+          <li><a href="https://dev.to/cjbrooks12/5-tips-for-writing-good-documentation-2clm">Five tips for writing good documentation</a></li>
+          <li><a href="https://diataxis.fr/">Diátaxis documentation framework</a></li>
+        </ul>
+        <h3>Technical references</h3>
+        <ul>
+          <li><a href="https://helpcenter.veeam.com/docs/vbo365/powershell/get-vborestorepoint.html">Veeam Backup for Microsoft 365 PowerShell reference · Get-VBORestorePoint</a></li>
+          <li><a href="https://doc.qt.io/qtforpython-6/">Qt for Python documentation</a></li>
+          <li><a href="https://pyinstaller.org/en/stable/operating-mode.html">PyInstaller operating modes</a></li>
+          <li><a href="https://learn.microsoft.com/windows/apps/design/design-principles">Microsoft Windows app design principles</a></li>
+          <li><a href="https://learn.microsoft.com/windows/apps/design/accessibility/designing-inclusive-software">Microsoft inclusive software guidance</a></li>
+        </ul>
+        <p class="small muted">The current source tree is authoritative for implementation details. External sources explain platform behavior and documentation/design practice; they do not override the application's code or the target Veeam environment.</p>
+      </section>
+
+      <section id="release">
+        <div class="eyebrow">Release record</div>
+        <h2>Version 1.2.4</h2>
+        <p>Version 1.2.4 adds the in-place organization/job search, selection summary and visible-result actions; reorganizes Run test around the operator's task; removes legacy default organization/job fields from Settings; and makes restore-point resolution strictly job-bound. It includes the earlier per-organization reporting, duration boundary, English statuses and resilient sample retry behavior.</p>
+        <p>Published recommended <code>onedir</code> launcher SHA-256:</p>
+        <pre><code>240914FC342C4862C5EDF344ACCB6E93E71AEEF3F29C60062E52437F49924363</code></pre>
+        <p>Compatibility standalone EXE SHA-256: <code>826C1780D8E7BE7DD984AEF66EEF172A972861F0445FF5594B34361D92D35913</code>.</p>
+      </section>
+    </div>
+
+    <footer>Veeam M365 Restore Tester 1.2.4 · MIT licensed · Documentation is maintained with the source repository.</footer>
+  </main>
+</div>
+</body>
+</html>

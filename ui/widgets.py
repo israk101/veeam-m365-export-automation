@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPixmap, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
@@ -159,6 +159,8 @@ class LogConsole(QPlainTextEdit):
 class OrgJobTree(QTreeWidget):
     """Checkable tree: root items are organizations, children are individual jobs."""
 
+    selection_changed = Signal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setHeaderHidden(True)
@@ -204,6 +206,7 @@ class OrgJobTree(QTreeWidget):
                 self._update_org_text(parent)
         finally:
             self.blockSignals(False)
+        self.selection_changed.emit()
 
     def load_inventory(
         self,
@@ -255,6 +258,31 @@ class OrgJobTree(QTreeWidget):
 
         self.expandAll()
         self.blockSignals(False)
+        self.selection_changed.emit()
+
+    def filter_items(self, query: str) -> tuple[int, int]:
+        """Show matching organizations/jobs without rebuilding or changing checks."""
+        needle = query.strip().casefold()
+        visible_organizations = 0
+        visible_jobs = 0
+        for i in range(self.topLevelItemCount()):
+            org_item = self.topLevelItem(i)
+            org_name = str(org_item.data(0, Qt.UserRole) or "")
+            organization_matches = not needle or needle in org_name.casefold()
+            matching_children = 0
+            for j in range(org_item.childCount()):
+                child = org_item.child(j)
+                job_name = str(child.data(0, Qt.UserRole) or child.text(0))
+                child_matches = organization_matches or needle in job_name.casefold()
+                child.setHidden(not child_matches)
+                matching_children += int(child_matches)
+            organization_visible = organization_matches or matching_children > 0
+            org_item.setHidden(not organization_visible)
+            if organization_visible:
+                visible_organizations += 1
+                visible_jobs += matching_children
+                org_item.setExpanded(bool(needle) or org_item.isExpanded())
+        return visible_organizations, visible_jobs
 
     def selected_jobs(self) -> list[tuple[str, str]]:
         result: list[tuple[str, str]] = []
@@ -282,3 +310,30 @@ class OrgJobTree(QTreeWidget):
                 org_item.child(j).setCheckState(0, state)
             self._update_org_text(org_item)
         self.blockSignals(False)
+        self.selection_changed.emit()
+
+    def set_visible(self, state: Qt.CheckState) -> None:
+        """Apply a check state only to jobs currently visible after filtering."""
+        self.blockSignals(True)
+        for i in range(self.topLevelItemCount()):
+            org_item = self.topLevelItem(i)
+            if org_item.isHidden():
+                continue
+            for j in range(org_item.childCount()):
+                child = org_item.child(j)
+                if not child.isHidden():
+                    child.setCheckState(0, state)
+            checked_count = sum(
+                org_item.child(j).checkState(0) == Qt.Checked
+                for j in range(org_item.childCount())
+            )
+            total = org_item.childCount()
+            if checked_count == total and total:
+                org_item.setCheckState(0, Qt.Checked)
+            elif checked_count:
+                org_item.setCheckState(0, Qt.PartiallyChecked)
+            else:
+                org_item.setCheckState(0, Qt.Unchecked)
+            self._update_org_text(org_item)
+        self.blockSignals(False)
+        self.selection_changed.emit()

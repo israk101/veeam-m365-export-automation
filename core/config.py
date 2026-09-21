@@ -7,13 +7,9 @@ from typing import Any
 
 
 DEFAULTS: dict[str, Any] = {
-    "organization": "",
-    "job_name": "",
-    "selected_jobs": [],
     "selected_multi_org_jobs": {},
     "restore_root": r"C:\VeeamRestoreLocalTest",
     "script_path": "",
-    "appearance": "dark",
     "max_restore_tests": 5,
     "skip_backups": True,
     "report_formats": ["txt", "html", "pdf"],
