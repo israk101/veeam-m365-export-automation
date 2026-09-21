@@ -19,6 +19,19 @@ Report_Summary.json
 .DS_Store
 Thumbs.db
 
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# PyInstaller output and local visual-test artifacts
+/build/
+/dist/
+/scratch/
+
 # IDE & Editor configurations
 .vscode/
 .idea/
