@@ -28,6 +28,10 @@
 .PARAMETER SkipBackup
     Switch facoltativo per testare direttamente la fase di estrazione/restore sull'ultimo restore point già presente.
 
+.PARAMETER MaxSampleAttempts
+    Numero massimo di elementi candidati da provare per ciascun workload quando
+    un'esportazione fallisce o produce un file vuoto. Default: 25.
+
 .EXAMPLE
     .\Invoke-SimpleM365BackupRestoreTest.ps1 -OrganizationName "israk.onmicrosoft.com" -JobName "VB365-LAB-M365-Backup"
 #>
@@ -43,7 +47,10 @@ param(
     [Parameter(Position = 2)]
     [string]$LocalRestoreRoot = "C:\VeeamRestoreLocalTest",
 
-    [switch]$SkipBackup
+    [switch]$SkipBackup,
+
+    [ValidateRange(1, 1000)]
+    [int]$MaxSampleAttempts = 25
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +84,16 @@ function Write-ErrorLog {
     param([string]$Message)
     Write-Host "[ERR]  $Message" -ForegroundColor Red
 }
+
+$sampleHelperPath = Join-Path $PSScriptRoot 'RestoreSampleHelpers.ps1'
+if (-not (Test-Path -LiteralPath $sampleHelperPath)) {
+    $sampleHelperPath = Join-Path $PSScriptRoot 'scripts\RestoreSampleHelpers.ps1'
+}
+if (-not (Test-Path -LiteralPath $sampleHelperPath)) {
+    Write-ErrorLog "Helper di selezione campioni non trovato: RestoreSampleHelpers.ps1"
+    exit 1
+}
+. $sampleHelperPath
 
 # ===========================================================================
 # FASE 1: RACCOLTA DATI DEL TENANT E VERIFICA CONNESSIONE VEEAM
@@ -266,57 +283,86 @@ try {
             throw "Nessuna casella postale utente idonea trovata nel restore point."
         }
 
-        $selectedMailbox = $null
-        $selectedEmail = $null
+        $exchangeResult = $null
+        $exchangeAttempts = 0
+        $exchangeCandidatesFound = 0
+        $exchangeEnumerationErrors = 0
+        $shuffledMailboxes = @($filteredMailboxes | Get-Random -Count $filteredMailboxes.Count)
 
-        $shuffledMailboxes = $filteredMailboxes | Get-Random -Count $filteredMailboxes.Count
         foreach ($mb in $shuffledMailboxes) {
-            $items = @(Get-VEXItem -Mailbox $mb | Where-Object {
-                $class = [string]$_.ItemClass
-                $class -like "IPM.Note*" -or $class -eq ""
-            })
-            if ($items.Count -gt 0) {
-                $selectedMailbox = $mb
-                $selectedEmail = $items | Get-Random -Count 1
+            if ($exchangeAttempts -ge $MaxSampleAttempts) { break }
+
+            try {
+                $items = @(Get-VEXItem -Mailbox $mb -ErrorAction Stop | Where-Object {
+                    $class = [string]$_.ItemClass
+                    $class -like "IPM.Note*" -or $class -eq ""
+                })
+            } catch {
+                $exchangeEnumerationErrors++
+                Write-WarnLog "Impossibile enumerare la casella '$($mb.Name)': $($_.Exception.Message). Proseguo con un'altra casella."
+                continue
+            }
+
+            if ($items.Count -eq 0) { continue }
+            $mbName = if ($null -ne $mb.Email) { [string]$mb.Email } else { [string]$mb.Name }
+            $candidates = @(
+                foreach ($item in $items) {
+                    [pscustomobject]@{ Item = $item; MailboxName = $mbName }
+                }
+            )
+            $exchangeCandidatesFound += $candidates.Count
+            $remainingAttempts = $MaxSampleAttempts - $exchangeAttempts
+            $candidateResult = Invoke-VerifiedSampleExport `
+                -Candidates $candidates `
+                -DestinationRoot $exDir `
+                -Workload 'Exchange' `
+                -MaxAttempts $remainingAttempts `
+                -ExportAction {
+                    param($candidate, $attemptDirectory)
+                    Export-VEXItem -Item $candidate.Item -To $attemptDirectory -Force -ErrorAction Stop | Out-Null
+                }
+            $exchangeAttempts += $candidateResult.Attempts
+            if ($candidateResult.Success) {
+                $exchangeResult = $candidateResult
                 break
             }
         }
 
-        if ($null -eq $selectedEmail) {
+        if ($exchangeCandidatesFound -eq 0) {
+            if ($exchangeEnumerationErrors -gt 0) {
+                throw "Nessun messaggio Exchange enumerabile; $exchangeEnumerationErrors caselle hanno restituito errori."
+            }
             throw "Nessun messaggio email trovato nelle caselle postali disponibili."
         }
+        if ($null -eq $exchangeResult -or -not $exchangeResult.Success) {
+            throw "Nessun messaggio Exchange esportabile e non vuoto trovato dopo $exchangeAttempts tentativi."
+        }
 
-        $mbName = if ($null -ne $selectedMailbox.Email) { [string]$selectedMailbox.Email } else { [string]$selectedMailbox.Name }
-        Write-InfoLog "Mail casuale selezionata:"
+        $selectedEmail = $exchangeResult.Candidate.Item
+        $mbName = $exchangeResult.Candidate.MailboxName
+        $file = $exchangeResult.File
+        $hash = $exchangeResult.SHA256
+        Write-InfoLog "Mail verificata selezionata:"
         Write-InfoLog "  - Casella sorgente : $mbName"
         Write-InfoLog "  - Oggetto          : $($selectedEmail.Subject)"
         Write-InfoLog "  - Data invio       : $($selectedEmail.Sent)"
-
-        Write-InfoLog "Esportazione messaggio in locale (Export-VEXItem)..."
-        Export-VEXItem -Item $selectedEmail -To $exDir -Force | Out-Null
-
-        $exportedMsgFiles = @(Get-ChildItem -Path $exDir -File -Recurse)
-        if ($exportedMsgFiles.Count -gt 0 -and $exportedMsgFiles[0].Length -gt 0) {
-            $file = $exportedMsgFiles[0]
-            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
-            $results.Exchange = [ordered]@{
-                Status       = "SUCCESS"
-                SourceMailbox= $mbName
-                Subject      = $selectedEmail.Subject
-                LocalFile    = $file.FullName
-                SizeBytes    = $file.Length
-                SHA256       = $hash
-            }
-            Write-SuccessLog "Email esportata e verificata con successo: $($file.Name) ($($file.Length) bytes, SHA256: $($hash.Substring(0,16))...)"
-        } else {
-            throw "Il file esportato da Exchange non e presente o ha dimensione pari a 0 byte."
+        $results.Exchange = [ordered]@{
+            Status        = "SUCCESS"
+            SourceMailbox = $mbName
+            Subject       = $selectedEmail.Subject
+            LocalFile     = $file.FullName
+            SizeBytes     = $file.Length
+            SHA256        = $hash
+            Attempts      = $exchangeAttempts
         }
+        Write-SuccessLog "Email esportata e verificata con successo al tentativo $exchangeAttempts`: $($file.Name) ($($file.Length) bytes, SHA256: $($hash.Substring(0,16))...)"
     } catch {
         $errMsg = $_.Exception.Message
         $isNotPresent = (
             $errMsg -like "*does not contain any Exchange data*" -or
             $errMsg -like "*non contiene dati Exchange*" -or
-            $errMsg -like "*Nessuna casella postale utente idonea trovata*"
+            $errMsg -like "*Nessuna casella postale utente idonea trovata*" -or
+            $errMsg -like "*Nessun messaggio email trovato*"
         )
         if ($isNotPresent) {
             Write-WarnLog "Carico di lavoro Exchange non presente o non configurato in questo restore point/job: $errMsg"
@@ -363,56 +409,84 @@ try {
             throw "Nessun utente OneDrive trovato nel restore point."
         }
 
-        $selectedOdUser = $null
-        $selectedDoc = $null
+        $oneDriveResult = $null
+        $oneDriveAttempts = 0
+        $oneDriveCandidatesFound = 0
+        $oneDriveEnumerationErrors = 0
+        $shuffledOdUsers = @($filteredUsers | Get-Random -Count $filteredUsers.Count)
 
-        $shuffledOdUsers = $filteredUsers | Get-Random -Count $filteredUsers.Count
         foreach ($u in $shuffledOdUsers) {
-            $docs = @(Get-VEODDocument -User $u -Recurse | Where-Object {
-                $name = [string]$_.Name
-                (-not [string]::IsNullOrWhiteSpace($name)) -and [IO.Path]::HasExtension($name)
-            })
-            if ($docs.Count -gt 0) {
-                $selectedOdUser = $u
-                $selectedDoc = $docs | Get-Random -Count 1
+            if ($oneDriveAttempts -ge $MaxSampleAttempts) { break }
+
+            try {
+                $docs = @(Get-VEODDocument -User $u -Recurse -ErrorAction Stop | Where-Object {
+                    Test-RestoreDocumentCandidate -Item $_ -RequireExtension
+                })
+            } catch {
+                $oneDriveEnumerationErrors++
+                Write-WarnLog "Impossibile enumerare OneDrive per '$($u.Name)': $($_.Exception.Message). Proseguo con un altro utente."
+                continue
+            }
+
+            if ($docs.Count -eq 0) { continue }
+            $odUserName = if ($null -ne $u.Name) { [string]$u.Name } else { [string]$u.UserName }
+            $candidates = @(
+                foreach ($document in $docs) {
+                    [pscustomobject]@{ Document = $document; UserName = $odUserName }
+                }
+            )
+            $oneDriveCandidatesFound += $candidates.Count
+            $remainingAttempts = $MaxSampleAttempts - $oneDriveAttempts
+            $candidateResult = Invoke-VerifiedSampleExport `
+                -Candidates $candidates `
+                -DestinationRoot $odDir `
+                -Workload 'OneDrive' `
+                -MaxAttempts $remainingAttempts `
+                -ExportAction {
+                    param($candidate, $attemptDirectory)
+                    Save-VEODDocument -Document $candidate.Document -Path $attemptDirectory -ErrorAction Stop | Out-Null
+                }
+            $oneDriveAttempts += $candidateResult.Attempts
+            if ($candidateResult.Success) {
+                $oneDriveResult = $candidateResult
                 break
             }
         }
 
-        if ($null -eq $selectedDoc) {
+        if ($oneDriveCandidatesFound -eq 0) {
+            if ($oneDriveEnumerationErrors -gt 0) {
+                throw "Nessun documento OneDrive enumerabile; $oneDriveEnumerationErrors utenti hanno restituito errori."
+            }
             throw "Nessun documento valido trovato nei profili OneDrive esaminati."
         }
+        if ($null -eq $oneDriveResult -or -not $oneDriveResult.Success) {
+            throw "Nessun documento OneDrive esportabile e non vuoto trovato dopo $oneDriveAttempts tentativi."
+        }
 
-        $odUserName = if ($null -ne $selectedOdUser.Name) { [string]$selectedOdUser.Name } else { [string]$selectedOdUser.UserName }
-        Write-InfoLog "Documento OneDrive casuale selezionato:"
+        $selectedDoc = $oneDriveResult.Candidate.Document
+        $odUserName = $oneDriveResult.Candidate.UserName
+        $file = $oneDriveResult.File
+        $hash = $oneDriveResult.SHA256
+        Write-InfoLog "Documento OneDrive verificato selezionato:"
         Write-InfoLog "  - Utente sorgente  : $odUserName"
         Write-InfoLog "  - Nome file        : $($selectedDoc.Name)"
-
-        Write-InfoLog "Salvataggio documento in locale (Save-VEODDocument)..."
-        Save-VEODDocument -Document $selectedDoc -Path $odDir | Out-Null
-
-        $savedOdFiles = @(Get-ChildItem -Path $odDir -File -Recurse)
-        if ($savedOdFiles.Count -gt 0 -and $savedOdFiles[0].Length -gt 0) {
-            $file = $savedOdFiles[0]
-            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
-            $results.OneDrive = [ordered]@{
-                Status    = "SUCCESS"
-                SourceUser= $odUserName
-                FileName  = $selectedDoc.Name
-                LocalFile = $file.FullName
-                SizeBytes = $file.Length
-                SHA256    = $hash
-            }
-            Write-SuccessLog "Documento OneDrive salvato e verificato con successo: $($file.Name) ($($file.Length) bytes, SHA256: $($hash.Substring(0,16))...)"
-        } else {
-            throw "Il file OneDrive salvato localmente non e presente o ha dimensione pari a 0 byte."
+        $results.OneDrive = [ordered]@{
+            Status     = "SUCCESS"
+            SourceUser = $odUserName
+            FileName   = $selectedDoc.Name
+            LocalFile  = $file.FullName
+            SizeBytes  = $file.Length
+            SHA256     = $hash
+            Attempts   = $oneDriveAttempts
         }
+        Write-SuccessLog "Documento OneDrive salvato e verificato con successo al tentativo $oneDriveAttempts`: $($file.Name) ($($file.Length) bytes, SHA256: $($hash.Substring(0,16))...)"
     } catch {
         $errMsg = $_.Exception.Message
         $isNotPresent = (
             $errMsg -like "*does not contain any OneDrive data*" -or
             $errMsg -like "*non contiene dati OneDrive*" -or
-            $errMsg -like "*Nessun utente OneDrive trovato*"
+            $errMsg -like "*Nessun utente OneDrive trovato*" -or
+            $errMsg -like "*Nessun documento valido trovato nei profili OneDrive*"
         )
         if ($isNotPresent) {
             Write-WarnLog "Carico di lavoro OneDrive non presente o non configurato in questo restore point/job: $errMsg"
@@ -457,66 +531,109 @@ try {
             throw "Nessun sito SharePoint valido trovato nel restore point."
         }
 
-        $selectedSite = $null
-        $selectedLibrary = $null
-        $selectedSpDoc = $null
+        $sharePointResult = $null
+        $sharePointAttempts = 0
+        $sharePointCandidatesFound = 0
+        $sharePointEnumerationErrors = 0
+        $shuffledSites = @($spSites | Get-Random -Count $spSites.Count)
 
-        $shuffledSites = $spSites | Get-Random -Count $spSites.Count
         foreach ($site in $shuffledSites) {
-            $libs = @(Get-VESPDocumentLibrary -Site $site -Recurse | Where-Object {
-                $_.Name -notmatch "SitePages|Site Assets|Style Library|Form Templates|User Photos"
-            })
-            foreach ($lib in $libs) {
-                $docs = @(Get-VESPDocument -DocumentLibrary $lib -Recurse | Where-Object {
-                    $docName = [string]$_.Name
-                    (-not [string]::IsNullOrWhiteSpace($docName)) -and
-                    ($docName -notmatch '\.(aspx|master|html?)$')
+            if ($sharePointAttempts -ge $MaxSampleAttempts) { break }
+
+            try {
+                $libs = @(Get-VESPDocumentLibrary -Site $site -Recurse -ErrorAction Stop | Where-Object {
+                    $_.Name -notmatch "SitePages|Site Assets|Style Library|Form Templates|User Photos"
                 })
-                if ($docs.Count -gt 0) {
-                    $selectedSite = $site
-                    $selectedLibrary = $lib
-                    $selectedSpDoc = $docs | Get-Random -Count 1
+            } catch {
+                $sharePointEnumerationErrors++
+                Write-WarnLog "Impossibile enumerare le librerie del sito '$($site.Name)': $($_.Exception.Message). Proseguo con un altro sito."
+                continue
+            }
+
+            if ($libs.Count -eq 0) { continue }
+            $shuffledLibraries = @($libs | Get-Random -Count $libs.Count)
+            foreach ($lib in $shuffledLibraries) {
+                if ($sharePointAttempts -ge $MaxSampleAttempts) { break }
+
+                try {
+                    $docs = @(Get-VESPDocument -DocumentLibrary $lib -Recurse -ErrorAction Stop | Where-Object {
+                        $docName = [string]$_.Name
+                        (Test-RestoreDocumentCandidate -Item $_) -and
+                        ($docName -notmatch '\.(aspx|master|html?)$')
+                    })
+                } catch {
+                    $sharePointEnumerationErrors++
+                    Write-WarnLog "Impossibile enumerare la libreria '$($lib.Name)' del sito '$($site.Name)': $($_.Exception.Message). Proseguo con un'altra libreria."
+                    continue
+                }
+
+                if ($docs.Count -eq 0) { continue }
+                $candidates = @(
+                    foreach ($document in $docs) {
+                        [pscustomobject]@{
+                            Document = $document
+                            Site     = $site
+                            Library  = $lib
+                        }
+                    }
+                )
+                $sharePointCandidatesFound += $candidates.Count
+                $remainingAttempts = $MaxSampleAttempts - $sharePointAttempts
+                $candidateResult = Invoke-VerifiedSampleExport `
+                    -Candidates $candidates `
+                    -DestinationRoot $spDir `
+                    -Workload 'SharePoint' `
+                    -MaxAttempts $remainingAttempts `
+                    -ExportAction {
+                        param($candidate, $attemptDirectory)
+                        Save-VESPItem -Document $candidate.Document -Path $attemptDirectory -Force -ErrorAction Stop | Out-Null
+                    }
+                $sharePointAttempts += $candidateResult.Attempts
+                if ($candidateResult.Success) {
+                    $sharePointResult = $candidateResult
                     break
                 }
             }
-            if ($null -ne $selectedSpDoc) { break }
+            if ($null -ne $sharePointResult -and $sharePointResult.Success) { break }
         }
 
-        if ($null -eq $selectedSpDoc) {
-            throw "Nessun documento valido trovato nei siti e librerie SharePoint analizzate."
+        if ($sharePointCandidatesFound -eq 0) {
+            if ($sharePointEnumerationErrors -gt 0) {
+                throw "Nessun documento SharePoint enumerabile; $sharePointEnumerationErrors siti o librerie hanno restituito errori."
+            }
+            throw "Nessun documento valido trovato nei siti e librerie SharePoint analizzate. Le cartelle e le pagine di sistema sono state escluse."
+        }
+        if ($null -eq $sharePointResult -or -not $sharePointResult.Success) {
+            throw "Nessun documento SharePoint esportabile e non vuoto trovato dopo $sharePointAttempts tentativi."
         }
 
-        Write-InfoLog "Documento SharePoint casuale selezionato:"
+        $selectedSpDoc = $sharePointResult.Candidate.Document
+        $selectedSite = $sharePointResult.Candidate.Site
+        $selectedLibrary = $sharePointResult.Candidate.Library
+        $file = $sharePointResult.File
+        $hash = $sharePointResult.SHA256
+        Write-InfoLog "Documento SharePoint verificato selezionato:"
         Write-InfoLog "  - Sito sorgente    : $($selectedSite.Name)"
         Write-InfoLog "  - Document Library : $($selectedLibrary.Name)"
         Write-InfoLog "  - Nome file        : $($selectedSpDoc.Name)"
-
-        Write-InfoLog "Salvataggio documento in locale (Save-VESPItem)..."
-        Save-VESPItem -Document $selectedSpDoc -Path $spDir -Force | Out-Null
-
-        $savedSpFiles = @(Get-ChildItem -Path $spDir -File -Recurse)
-        if ($savedSpFiles.Count -gt 0 -and $savedSpFiles[0].Length -gt 0) {
-            $file = $savedSpFiles[0]
-            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
-            $results.SharePoint = [ordered]@{
-                Status    = "SUCCESS"
-                Site      = $selectedSite.Name
-                Library   = $selectedLibrary.Name
-                FileName  = $selectedSpDoc.Name
-                LocalFile = $file.FullName
-                SizeBytes = $file.Length
-                SHA256    = $hash
-            }
-            Write-SuccessLog "Documento SharePoint salvato e verificato con successo: $($file.Name) ($($file.Length) bytes, SHA256: $($hash.Substring(0,16))...)"
-        } else {
-            throw "Il file SharePoint salvato localmente non e presente o ha dimensione pari a 0 byte."
+        $results.SharePoint = [ordered]@{
+            Status    = "SUCCESS"
+            Site      = $selectedSite.Name
+            Library   = $selectedLibrary.Name
+            FileName  = $selectedSpDoc.Name
+            LocalFile = $file.FullName
+            SizeBytes = $file.Length
+            SHA256    = $hash
+            Attempts  = $sharePointAttempts
         }
+        Write-SuccessLog "Documento SharePoint salvato e verificato con successo al tentativo $sharePointAttempts`: $($file.Name) ($($file.Length) bytes, SHA256: $($hash.Substring(0,16))...)"
     } catch {
         $errMsg = $_.Exception.Message
         $isNotPresent = (
             $errMsg -like "*does not contain any SharePoint data*" -or
             $errMsg -like "*non contiene dati SharePoint*" -or
-            $errMsg -like "*Nessun sito SharePoint valido trovato*"
+            $errMsg -like "*Nessun sito SharePoint valido trovato*" -or
+            $errMsg -like "*Nessun documento valido trovato nei siti e librerie SharePoint*"
         )
         if ($isNotPresent) {
             Write-WarnLog "Carico di lavoro SharePoint non presente o non configurato in questo restore point/job: $errMsg"

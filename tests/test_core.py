@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import textwrap
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -18,6 +22,34 @@ from core.runner import PowerShellRunner
 from ui.widgets import OrgJobTree
 from ui.dialogs import StyledDialog
 from app import RunPage
+
+
+def _run_sample_helper(tmp_path: Path, body: str) -> dict:
+    pwsh = shutil.which("pwsh.exe") or shutil.which("pwsh")
+    if not pwsh:
+        pytest.skip("PowerShell 7 is not installed")
+    helper = Path(__file__).resolve().parents[1] / "scripts" / "RestoreSampleHelpers.ps1"
+    helper_literal = str(helper).replace("'", "''")
+    script = tmp_path / "helper-test.ps1"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            $ErrorActionPreference = 'Stop'
+            function Write-WarnLog {{ param([string]$Message) }}
+            . '{helper_literal}'
+            {body}
+            """
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [pwsh, "-NoLogo", "-NoProfile", "-NonInteractive", "-File", str(script)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return json.loads(completed.stdout.strip())
 
 
 def test_config_round_trip(tmp_path: Path) -> None:
@@ -573,3 +605,86 @@ def test_styled_dialog_uses_application_buttons() -> None:
     assert buttons["Keep running"].objectName() == ""
     assert dialog.windowFlags() & Qt.FramelessWindowHint
     dialog.close()
+
+
+def test_sample_export_skips_containers_and_retries_bad_candidates(tmp_path: Path) -> None:
+    destination = str(tmp_path / "restore").replace("'", "''")
+    result = _run_sample_helper(
+        tmp_path,
+        f"""
+        $folder = [pscustomobject]@{{ Name = 'Folder'; IsContainer = $true }}
+        $file = [pscustomobject]@{{ Name = 'report.docx'; IsContainer = $false }}
+        $missingExtension = [pscustomobject]@{{ Name = 'README'; IsContainer = $false }}
+        $destination = '{destination}'
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $destination 'existing.bin'), [byte[]](9))
+        $candidates = @('empty', 'throws', 'good')
+        $export = Invoke-VerifiedSampleExport `
+            -Candidates $candidates `
+            -DestinationRoot $destination `
+            -Workload 'SharePoint' `
+            -MaxAttempts 3 `
+            -DisableRandomization `
+            -ExportAction {{
+                param($candidate, $attemptDirectory)
+                if ($candidate -eq 'empty') {{
+                    [IO.File]::WriteAllBytes((Join-Path $attemptDirectory 'empty.bin'), [byte[]]@())
+                }} elseif ($candidate -eq 'throws') {{
+                    throw 'simulated unavailable item'
+                }} else {{
+                    [IO.File]::WriteAllBytes((Join-Path $attemptDirectory 'existing.bin'), [byte[]](1, 2, 3, 4))
+                }}
+            }}
+        [pscustomobject]@{{
+            FolderAccepted = Test-RestoreDocumentCandidate -Item $folder
+            FileAccepted = Test-RestoreDocumentCandidate -Item $file -RequireExtension
+            MissingExtensionAccepted = Test-RestoreDocumentCandidate -Item $missingExtension -RequireExtension
+            Success = $export.Success
+            Attempts = $export.Attempts
+            Size = $export.File.Length
+            HashLength = $export.SHA256.Length
+            CollisionAvoided = ($export.File.Name -ne 'existing.bin')
+            OriginalPreserved = ((Get-Item (Join-Path $destination 'existing.bin')).Length -eq 1)
+            WorkspacesLeft = @(Get-ChildItem $destination -Directory -Filter '.sample-attempts-*').Count
+        }} | ConvertTo-Json -Compress
+        """,
+    )
+    assert result == {
+        "FolderAccepted": False,
+        "FileAccepted": True,
+        "MissingExtensionAccepted": False,
+        "Success": True,
+        "Attempts": 3,
+        "Size": 4,
+        "HashLength": 64,
+        "CollisionAvoided": True,
+        "OriginalPreserved": True,
+        "WorkspacesLeft": 0,
+    }
+
+
+def test_sample_export_honors_attempt_limit_and_cleans_up(tmp_path: Path) -> None:
+    destination = str(tmp_path / "restore").replace("'", "''")
+    result = _run_sample_helper(
+        tmp_path,
+        f"""
+        $destination = '{destination}'
+        $export = Invoke-VerifiedSampleExport `
+            -Candidates @('one', 'two', 'three') `
+            -DestinationRoot $destination `
+            -Workload 'OneDrive' `
+            -MaxAttempts 2 `
+            -DisableRandomization `
+            -ExportAction {{
+                param($candidate, $attemptDirectory)
+                [IO.File]::WriteAllBytes((Join-Path $attemptDirectory "$candidate.bin"), [byte[]]@())
+            }}
+        [pscustomobject]@{{
+            Success = $export.Success
+            Attempts = $export.Attempts
+            FilesLeft = @(Get-ChildItem $destination -File -Recurse).Count
+            WorkspacesLeft = @(Get-ChildItem $destination -Directory -Filter '.sample-attempts-*').Count
+        }} | ConvertTo-Json -Compress
+        """,
+    )
+    assert result == {"Success": False, "Attempts": 2, "FilesLeft": 0, "WorkspacesLeft": 0}

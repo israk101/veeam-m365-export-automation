@@ -1,4 +1,4 @@
-# Veeam M365 Restore Tester v1.2.0
+# Veeam M365 Restore Tester v1.2.1
 
 > Non-destructive Microsoft 365 backup verification with a modern Windows desktop interface, local evidence extraction and executive reporting.
 
@@ -14,7 +14,7 @@ The workflow is intentionally out-of-place: it does not restore content into Mic
 
 ![Veeam M365 Restore Tester settings](examples/v1.2-settings.png)
 
-## Highlights in v1.2.0
+## Highlights in v1.2.1
 
 - Modern PySide6 desktop UI with Dashboard, Run test, Reports and Settings views.
 - Automatic organization and backup-job discovery from the local VB365 server.
@@ -26,6 +26,7 @@ The workflow is intentionally out-of-place: it does not restore content into Mic
 - Historical report browser, direct evidence-folder access and configurable retention.
 - Consistent custom confirmation, warning, error and success dialogs.
 - Standalone, UAC-aware Windows executable with scripts and visual assets embedded.
+- Resilient sample selection: folders are excluded and failed/empty exports automatically retry another randomized item (up to 25 attempts per workload by default).
 
 ## Safety model
 
@@ -80,7 +81,8 @@ pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
   -OrganizationName "contoso.onmicrosoft.com" `
   -JobName "Microsoft 365 Backup" `
   -LocalRestoreRoot "C:\VeeamRestoreLocalTest" `
-  -SkipBackup
+  -SkipBackup `
+  -MaxSampleAttempts 25
 ```
 
 The duplicate script at the repository root is retained for backward compatibility with earlier command examples. The packaged application uses the canonical copy under `scripts\`.
@@ -127,6 +129,7 @@ TXT, HTML and PDF can be enabled independently in Settings. JSON cannot be disab
 | `core/paths.py` | Resolves source-tree and PyInstaller `_MEIPASS` resource paths plus `pwsh.exe`. |
 | `scripts/Get-VeeamM365Inventory.ps1` | Read-only organization/job inventory for the local VB365 installation. |
 | `scripts/Invoke-SimpleM365BackupRestoreTest.ps1` | Existing backup/restore verification engine and per-job evidence producer. |
+| `scripts/RestoreSampleHelpers.ps1` | Container filtering, isolated export attempts, non-zero validation, collision handling and SHA-256 verification. |
 
 ### Runtime flow
 
@@ -158,6 +161,20 @@ pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
 ```
 
 Standard output and error are merged so ordering is preserved in the live log. `[OK]`, `[WARN]` and `[ERR]` markers determine log color; known PowerShell milestones update the current phase shown in the UI.
+
+### Resilient sample selection
+
+SharePoint's `Get-VESPDocument` can return both documents and folder containers. The selection pipeline explicitly rejects objects whose `IsContainer` or `IsFolder` property is true. OneDrive applies the same guard and retains the extension check used for compatibility with older Explorer object models.
+
+Candidates are randomized, but an item is not accepted merely because it was returned by Veeam. Each Exchange, OneDrive or SharePoint candidate is exported into its own short-lived directory and must pass all of these checks:
+
+1. The export command completes without a terminating error.
+2. At least one regular file is produced recursively.
+3. The chosen output has a size greater than zero.
+4. The file can be copied without overwriting an existing evidence file.
+5. A SHA-256 hash can be calculated from the final copy.
+
+If any check fails, the attempt directory is removed and the next candidate is tried. Enumeration errors affecting one mailbox, OneDrive user, SharePoint site or document library no longer abort the entire workload. `-MaxSampleAttempts` bounds the work (default `25`, accepted range `1..1000`) and prevents pathological repositories from producing an endless loop. Empty workloads are reported as not configured; a workload with candidates that all fail validation remains a genuine failure.
 
 ### Discovery protocol
 
@@ -201,7 +218,7 @@ Output:
 dist\VeeamM365RestoreTester.exe
 ```
 
-The checked-in v1.2.0 executable is approximately 197 MiB because it includes Python, Qt 6 and the Qt WebEngine/Chromium runtime required for PDF reports. It is tracked with Git LFS to remain compatible with GitHub's normal file-size limit.
+The checked-in v1.2.1 executable is approximately 197 MiB because it includes Python, Qt 6 and the Qt WebEngine/Chromium runtime required for PDF reports. It is tracked with Git LFS to remain compatible with GitHub's normal file-size limit.
 
 ### Repository layout
 
@@ -247,12 +264,12 @@ Build the executable:
 
 ## Version integrity
 
-The repository executable and `version_info.txt` identify this release as **1.2.0**.
+The repository executable and `version_info.txt` identify this release as **1.2.1**.
 
 Published executable SHA-256:
 
 ```text
-F85A11F9F5FDF5B679CAE558B9455E171C724B5659CB1874271BCB1C38CD5C94
+6A0B397F584EC5C6973FF8A1A3B09D536916753D368F22A4999EFB881183A47D
 ```
 
 You can verify it with:

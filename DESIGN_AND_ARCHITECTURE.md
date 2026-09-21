@@ -28,6 +28,13 @@ PDF executive report generated through Qt WebEngine. The WebEngine dependency
 is packaged into the standalone executable so the target host does not need a
 separate browser or Python installation.
 
+Version 1.2.1 hardens sample extraction for repositories containing empty
+folders, zero-byte items, stale objects or isolated Explorer errors. Folder
+containers are rejected through `IsContainer`/`IsFolder`; each candidate is
+exported into an isolated temporary directory and is accepted only after a
+non-zero size check, collision-safe copy and SHA-256 calculation. Failed
+candidates are retried up to a bounded per-workload limit.
+
 ## UX decisions
 
 - Four flat destinations: Dashboard, Run test, Reports, Settings

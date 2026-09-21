@@ -652,7 +652,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
             <div>
                 <div class="info-row"><span class="info-label">Data Esecuzione:</span><span class="info-val">{date_display}</span></div>
                 <div class="info-row"><span class="info-label">Restore Point:</span><span class="info-val">{summary.get('RestorePointDate', '—')}</span></div>
-                <div class="info-row"><span class="info-label">Tool di Test:</span><span class="info-val">Veeam M365 Restore Tester v2.0</span></div>
+                <div class="info-row"><span class="info-label">Tool di Test:</span><span class="info-val">Veeam M365 Restore Tester v1.2.1</span></div>
             </div>
         </div>
 

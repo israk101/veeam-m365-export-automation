@@ -13,6 +13,7 @@ python -m PyInstaller `
     --version-file "version_info.txt" `
     --add-data "scripts\Invoke-SimpleM365BackupRestoreTest.ps1;scripts" `
     --add-data "scripts\Get-VeeamM365Inventory.ps1;scripts" `
+    --add-data "scripts\RestoreSampleHelpers.ps1;scripts" `
     --add-data "assets\app-icon.ico;assets" `
     --add-data "assets\app-icon.svg;assets" `
     --add-data "assets\logos_logo.png;assets" `
