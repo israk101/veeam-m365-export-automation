@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+import codecs
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, Signal
+from PySide6.QtCore import QObject, QProcess, Signal, QTimer
 
 
 class PowerShellRunner(QObject):
@@ -20,6 +21,10 @@ class PowerShellRunner(QObject):
         self.process.finished.connect(self._finished)
         self.process.errorOccurred.connect(self._error)
         self._buffer = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._kill_timer = QTimer(self)
+        self._kill_timer.setSingleShot(True)
+        self._kill_timer.timeout.connect(self.process.kill)
 
     def start(
         self,
@@ -29,6 +34,7 @@ class PowerShellRunner(QObject):
         job_name: str,
         restore_root: str,
         skip_backup: bool,
+        sample_candidate_limit: int | None = None,
     ) -> None:
         if self.is_running():
             return
@@ -49,7 +55,11 @@ class PowerShellRunner(QObject):
         ]
         if skip_backup:
             arguments.append("-SkipBackup")
+        if sample_candidate_limit is not None:
+            arguments.extend(["-SampleCandidateLimit", str(sample_candidate_limit)])
         self._buffer = ""
+        self._decoder.reset()
+        self._kill_timer.stop()
         self.process.setProgram(powershell)
         self.process.setArguments(arguments)
         self.process.start()
@@ -59,14 +69,13 @@ class PowerShellRunner(QObject):
             return
         self.output.emit("[WARN] Stop requested. Closing the PowerShell process…", "warning")
         self.process.terminate()
-        if not self.process.waitForFinished(2500):
-            self.process.kill()
+        self._kill_timer.start(2500)
 
     def is_running(self) -> bool:
         return self.process.state() != QProcess.NotRunning
 
     def _read_output(self) -> None:
-        self._buffer += bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        self._buffer += self._decoder.decode(bytes(self.process.readAllStandardOutput()))
         lines = self._buffer.splitlines(keepends=True)
         self._buffer = ""
         if lines and not lines[-1].endswith(("\n", "\r")):
@@ -101,10 +110,13 @@ class PowerShellRunner(QObject):
                 break
 
     def _finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
+        self._kill_timer.stop()
+        self._read_output()
+        self._buffer += self._decoder.decode(b"", final=True)
         if self._buffer:
             self._emit_line(self._buffer)
             self._buffer = ""
-        self.finished.emit(exit_code)
+        self.finished.emit(exit_code if _status == QProcess.NormalExit else (exit_code or -1))
 
     def _error(self, error: QProcess.ProcessError) -> None:
         if error == QProcess.FailedToStart:

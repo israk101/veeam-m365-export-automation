@@ -80,7 +80,7 @@ function Invoke-VerifiedSampleExport {
     $orderedCandidates = if ($DisableRandomization) {
         $candidateList
     } else {
-        @($candidateList | Get-Random -Count $candidateList.Count)
+        @($candidateList | Get-Random -Count ([Math]::Min($MaxAttempts, $candidateList.Count)))
     }
 
     $workspace = Join-Path $DestinationRoot ('.sample-attempts-' + [guid]::NewGuid().ToString('N'))
@@ -121,7 +121,14 @@ function Invoke-VerifiedSampleExport {
                     $destinationPath = Join-Path $DestinationRoot ("{0}_{1}{2}" -f $stem, [guid]::NewGuid().ToString('N').Substring(0, 8), $extension)
                 }
 
-                Copy-Item -LiteralPath $sourceFile.FullName -Destination $destinationPath -Force -ErrorAction Stop
+                # Same-volume rename avoids copying the restored payload a second time.
+                # Both paths are inside the destination created by this invocation.
+                $rootPath = [IO.Path]::GetFullPath($DestinationRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+                if (-not $sourceFile.FullName.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase) -or
+                    -not [IO.Path]::GetFullPath($destinationPath).StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'Sample path escaped the restore destination.'
+                }
+                Move-Item -LiteralPath $sourceFile.FullName -Destination $destinationPath -ErrorAction Stop
                 $finalFile = Get-Item -LiteralPath $destinationPath -ErrorAction Stop
                 if ($finalFile.Length -le 0) {
                     throw "Il file copiato per $Workload ha dimensione pari a 0 byte."

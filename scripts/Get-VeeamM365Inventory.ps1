@@ -3,6 +3,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $connected = $false
 
 try {

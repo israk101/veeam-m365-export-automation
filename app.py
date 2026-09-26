@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass
 import os
-import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +29,10 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
     QVBoxLayout,
     QWidget,
 )
@@ -39,24 +41,13 @@ from core.config import ConfigManager
 from core.batch_report import build_organization_summaries, normalize_status, overall_status, write_batch_report
 from core.discovery import InventoryDiscovery, flatten_inventory
 from core.paths import bundled_script, discovery_script, powershell_path, resolve_script, resource_path
-from core.reports import Report, format_duration, latest_report, list_reports, read_report
+from core.reports import Report, format_duration, list_reports
 from core.runner import PowerShellRunner
+from core.queue import JobQueue, JobTask as PendingJob
+from core.retention import sanitize_org_name
 from ui.theme import COLORS, stylesheet
 from ui.widgets import LogConsole, OrgJobTree, PageHeading, StatusCard
 from ui.dialogs import ask_confirmation, show_error, show_information, show_warning
-
-
-@dataclass
-class PendingJob:
-    org_name: str
-    job_name: str
-
-
-def clear_layout(layout: QVBoxLayout | QHBoxLayout | QGridLayout) -> None:
-    while layout.count():
-        item = layout.takeAt(0)
-        if item.widget():
-            item.widget().deleteLater()
 
 
 def cleanup_batch_workspace(workspace: Path | None, report_directory: Path | None) -> str | None:
@@ -146,7 +137,61 @@ class DashboardPage(QWidget):
         panel_layout.addWidget(label)
         panel_layout.addWidget(self.details)
         layout.addWidget(panel)
-        layout.addStretch()
+        self.fleet_summary = QLabel("No organizations tested")
+        self.fleet_summary.setObjectName("Muted")
+        layout.addWidget(self.fleet_summary)
+        self.org_table = QTableWidget(0, 5)
+        self.org_table.setHorizontalHeaderLabels(["Organization", "Latest result", "Tested", "Execution", "Reports"])
+        self.org_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.org_table.verticalHeader().setDefaultSectionSize(42)
+        self.org_table.setWordWrap(False)
+        self.org_table.verticalHeader().hide()
+        self.org_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.org_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.org_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.org_table.itemSelectionChanged.connect(self._select_organization)
+        self.org_table.cellDoubleClicked.connect(lambda *_: self._open_evidence())
+        layout.addWidget(self.org_table, stretch=1)
+        self.open_evidence = QPushButton("Open selected evidence folder")
+        self.open_evidence.setEnabled(False)
+        self.open_evidence.clicked.connect(self._open_evidence)
+        layout.addWidget(self.open_evidence, alignment=Qt.AlignLeft)
+        self.organization_reports: list[Report] = []
+
+    def load_reports(self, reports: list[Report]) -> None:
+        latest: dict[str, Report] = {}
+        for report in reports:
+            latest.setdefault(str(report.data.get("Organization", "Unknown")), report)
+        self.organization_reports = sorted(latest.values(), key=lambda r: (overall_status(r.data) == "SUCCESS" and not r.data.get("ReportErrors"), str(r.data.get("Organization", "")).casefold()))
+        self.org_table.blockSignals(True)
+        self.org_table.setRowCount(len(self.organization_reports))
+        for row, report in enumerate(self.organization_reports):
+            data = report.data
+            values = [str(data.get("Organization", "Unknown")), overall_status(data), report.timestamp,
+                      format_duration(data.get("DurationSeconds")), format_duration(data.get("ReportDurationSeconds"))]
+            if data.get("ReportErrors"):
+                values[1] += " · report error"
+            for column, value in enumerate(values):
+                self.org_table.setItem(row, column, QTableWidgetItem(value))
+        self.org_table.blockSignals(False)
+        attention = sum(overall_status(r.data) != "SUCCESS" or bool(r.data.get("ReportErrors")) for r in latest.values())
+        self.fleet_summary.setText(f"{len(latest)} organizations · {attention} need attention · {len(reports)} retained reports · select a row for details")
+        if self.organization_reports:
+            self.org_table.selectRow(0)
+            self._select_organization()
+        else:
+            self.load_report(None)
+        self.open_evidence.setEnabled(bool(self.organization_reports))
+
+    def _select_organization(self) -> None:
+        row = self.org_table.currentRow()
+        if 0 <= row < len(self.organization_reports):
+            self.load_report(self.organization_reports[row])
+
+    def _open_evidence(self) -> None:
+        row = self.org_table.currentRow()
+        if 0 <= row < len(self.organization_reports):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.organization_reports[row].path.parent)))
 
     def load_report(self, report: Report | None) -> None:
         if not report:
@@ -185,6 +230,15 @@ class DashboardPage(QWidget):
         self.details.setText(
             f"Backup: {data.get('BackupStatus', '—')}    ·    Job: {data.get('JobName', '—')}    ·    Restore point: {data.get('RestorePointDate', '—')}"
         )
+        timings = [(entry.get("job", ""), phase, seconds)
+                   for entry in data.get("JobResults", [])
+                   for phase, seconds in (entry.get("report") or {}).get("PhaseTimings", {}).items()
+                   if isinstance(seconds, (int, float))]
+        if timings:
+            job, phase, seconds = max(timings, key=lambda item: item[2])
+            self.details.setText(self.details.text() + f"\nSlowest phase: {job} / {phase} · {seconds:.1f}s")
+        if data.get("ReportErrors"):
+            self.details.setText(self.details.text() + "\n" + "; ".join(data["ReportErrors"]))
 
 
 class RunPage(QWidget):
@@ -192,18 +246,15 @@ class RunPage(QWidget):
         super().__init__()
         self.config = config
         self.runner = runner
+        self.queue = JobQueue(self)
+        self.batch_active = False
         self.finished_callback = finished_callback
         self.discovery = InventoryDiscovery(self)
         self.inventory: dict[str, list[dict[str, str]]] = {}
-        self.pending_jobs: list[PendingJob] = []
         self.completed_jobs: list[dict[str, Any]] = []
-        self.current_job: PendingJob | None = None
-        self.current_started_at = 0.0
-        self.current_started_monotonic: float | None = None
         self.batch_started: datetime | None = None
         self.batch_started_monotonic: float | None = None
         self.batch_directory: Path | None = None
-        self.current_job_root: Path | None = None
         self.stop_requested = False
         root = QVBoxLayout(self)
         root.setSpacing(16)
@@ -247,7 +298,7 @@ class RunPage(QWidget):
 
         self.job_tree = OrgJobTree()
         self.job_tree.setMinimumHeight(145)
-        self.job_tree.setToolTip("Select jobs across any organization. Checked jobs run sequentially.")
+        self.job_tree.setToolTip("Select jobs across any organization. Organizations can run concurrently; jobs within each organization run sequentially.")
         self.job_tree.selection_changed.connect(self._update_selection_summary)
         panel_layout.addWidget(self.job_tree, stretch=1)
 
@@ -330,6 +381,10 @@ class RunPage(QWidget):
         title_row.addStretch()
         title_row.addWidget(self.phase)
         activity_layout.addLayout(title_row)
+        self.active_jobs = QLabel("No active jobs")
+        self.active_jobs.setObjectName("Muted")
+        self.active_jobs.setWordWrap(True)
+        activity_layout.addWidget(self.active_jobs)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -340,10 +395,9 @@ class RunPage(QWidget):
         activity_layout.addWidget(self.log, stretch=1)
         body.addWidget(activity, stretch=1)
         root.addLayout(body, stretch=1)
-        runner.output.connect(self._on_output)
-        runner.phase_changed.connect(self._set_phase)
-        runner.finished.connect(self._complete)
-        runner.failed_to_start.connect(self._start_error)
+        self.queue.output.connect(self.log.append_line)
+        self.queue.progress.connect(self._queue_progress)
+        self.queue.finished.connect(self._queue_complete)
         self.discovery.completed.connect(self._inventory_loaded)
         self.discovery.failed.connect(self._inventory_failed)
         self.elapsed_timer = QTimer(self)
@@ -354,6 +408,8 @@ class RunPage(QWidget):
             QTimer.singleShot(0, self.refresh_inventory)
 
     def sync_defaults(self) -> None:
+        if self.batch_active:
+            return
         if not self.restore.hasFocus():
             self.restore.setText(str(self.config.get("restore_root")))
         default_skip = bool(self.config.get("skip_backups", True))
@@ -458,6 +514,8 @@ class RunPage(QWidget):
             self.restore.setText(chosen)
 
     def start(self) -> None:
+        if self.batch_active:
+            return
         selections = self._selected_multi_org_jobs()
         restore = self.restore.text().strip()
         if not selections or not restore:
@@ -470,6 +528,10 @@ class RunPage(QWidget):
             return
         if not script.is_file():
             show_error(self, "Script not found", f"The configured PowerShell script does not exist:\n{script}")
+            return
+        org_names = {job.org_name for job in selections}
+        if len({sanitize_org_name(name).casefold() for name in org_names}) != len(org_names):
+            show_error(self, "Organization folder conflict", "Two selected organization names map to the same storage folder. Run them with separate restore roots.")
             return
         Path(restore).mkdir(parents=True, exist_ok=True)
         multi_dict = self.job_tree.selected_dict()
@@ -487,116 +549,82 @@ class RunPage(QWidget):
         self.refresh_inventory_button.setEnabled(False)
         self._set_configuration_enabled(False)
         self.progress.setRange(0, 0)
-        self.pending_jobs = list(selections)
+        self.batch_active = True
         self.completed_jobs = []
         self.batch_started = datetime.now()
         self.batch_started_monotonic = monotonic()
         self.elapsed_label.setText("Elapsed 00:00:00")
         self.elapsed_timer.start()
         self.batch_directory = Path(restore) / f"Batch_{self.batch_started.strftime('%Y%m%d_%H%M%S')}"
+        # A repeated click/run within the same second must not reuse old staging.
+        from datetime import timedelta
+        while True:
+            try:
+                self.batch_directory.mkdir(exist_ok=False)
+                break
+            except FileExistsError:
+                self.batch_started += timedelta(seconds=1)
+                self.batch_directory = Path(restore) / f"Batch_{self.batch_started:%Y%m%d_%H%M%S}"
         self.stop_requested = False
-        self._start_next_job()
-
-    def _start_next_job(self) -> None:
-        if self.stop_requested or not self.pending_jobs:
-            self._finish_batch()
-            return
-        self.current_job = self.pending_jobs.pop(0)
-        self.current_started_at = datetime.now().timestamp()
-        self.current_started_monotonic = monotonic()
-        safe_org = re.sub(r"[^A-Za-z0-9._-]+", "_", self.current_job.org_name).strip("._") or "org"
-        safe_job = re.sub(r"[^A-Za-z0-9._-]+", "_", self.current_job.job_name).strip("._") or "job"
-        self.current_job_root = (self.batch_directory or Path(self.restore.text().strip())) / "Jobs" / safe_org / safe_job
-        self.current_job_root.mkdir(parents=True, exist_ok=True)
-        total = len(self.completed_jobs) + len(self.pending_jobs) + 1
-        current = len(self.completed_jobs) + 1
-        job_display = f"{self.current_job.org_name} / {self.current_job.job_name}"
-        self.phase.setText(f"Job {current} of {total}: {job_display}")
-        self.log.append_line(f"[INFO] ── Job {current}/{total}: {job_display} ──", "info")
-        self.runner.start(
-            powershell_path() or "pwsh.exe",
-            resolve_script(str(self.config.get("script_path", ""))),
-            self.current_job.org_name,
-            self.current_job.job_name,
-            str(self.current_job_root),
-            self.skip.isChecked(),
+        self.run_settings = self.config.data.copy()
+        self.queue.start(
+            selections, shell=shell, script=script, workspace=self.batch_directory,
+            skip_backup=self.skip.isChecked(),
+            concurrency=int(self.run_settings.get("max_parallel_orgs", 2)),
+            candidate_limit=int(self.run_settings.get("sample_candidate_limit", 100)) if script == bundled_script().resolve() else None,
         )
+
+    def _queue_progress(self, completed: int, total: int, activity: str) -> None:
+        self.progress.setRange(0, max(1, total))
+        self.progress.setValue(completed)
+        self.phase.setText(f"{completed}/{total} complete · {len(self.queue.active)} active")
+        self.active_jobs.setText(activity or "Preparing final reports…")
+
+    def _queue_complete(self, results: list, cancelled: bool) -> None:
+        self.completed_jobs = results
+        self.stop_requested = cancelled
+        self.stop_button.setEnabled(False)
+        self._finish_batch()
 
     def stop(self) -> None:
-        confirmed = ask_confirmation(
-            self,
-            "Stop this test?",
-            "PowerShell will be terminated. Any files already extracted will remain on disk.",
-            accept_text="Stop test",
-            cancel_text="Keep running",
-            destructive=True,
-        )
-        if confirmed:
-            self.stop_requested = True
-            self.pending_jobs.clear()
-            self.runner.stop()
+        if ask_confirmation(
+            self, "Stop this test?",
+            "All active PowerShell processes will be stopped. Extracted files will remain on disk.",
+            accept_text="Stop test", cancel_text="Keep running", destructive=True,
+        ):
+            self.cancel_run()
 
-    def _set_phase(self, phase: str) -> None:
-        label = f"{self.current_job.job_name} · {phase}" if self.current_job else phase
-        self.phase.setText(label)
-
-    def _on_output(self, line: str, level: str) -> None:
-        prefix = f"[{self.current_job.job_name}] " if self.current_job else ""
-        self.log.append_line(f"{prefix}{line}", level)
-
-    def _complete(self, code: int) -> None:
-        if not self.current_job:
-            return
-        report = latest_report(self.current_job_root) if self.current_job_root else None
-        report_data: dict[str, Any] | None = None
-        report_path: str | None = None
-        if report and report.modified >= self.current_started_at - 1 and str(report.data.get("JobName", "")) == self.current_job.job_name:
-            report_data = report.data
-            report_path = str(report.path)
-        self.completed_jobs.append({
-            "organization": self.current_job.org_name,
-            "job": self.current_job.job_name,
-            "exit_code": code,
-            "report_path": report_path,
-            "report": report_data,
-            "duration_seconds": max(
-                0,
-                int(round(monotonic() - self.current_started_monotonic)),
-            ) if self.current_started_monotonic is not None else 0,
-        })
-        rep = report_data if isinstance(report_data, dict) else {}
-        passed_wls = [
-            wl for wl in ("Exchange", "OneDrive", "SharePoint")
-            if isinstance(rep.get(wl), dict) and str(rep.get(wl, {}).get("Status", "")).upper() == "SUCCESS"
-        ]
-        has_success = (code == 0) or bool(rep.get("AllSuccessful")) or bool(passed_wls)
-        level = "success" if has_success else "warning"
-        status_tag = "OK" if has_success else "WARN"
-        wl_info = f" ({', '.join(passed_wls)})" if passed_wls and len(passed_wls) < 3 else ""
-        self.log.append_line(f"[{status_tag}] Job '{self.current_job.job_name}' finished with exit code {code}{wl_info}.", level)
-        self.current_job = None
-        self.current_started_monotonic = None
-        self._start_next_job()
+    def cancel_run(self) -> None:
+        self.stop_requested = True
+        self.stop_button.setEnabled(False)
+        self.queue.stop()
 
     def _finish_batch(self) -> None:
-        duration_seconds = self._elapsed_seconds()
-        self.elapsed_timer.stop()
-        self.elapsed_label.setText(f"Completed in {format_duration(duration_seconds)}")
         summaries = build_organization_summaries(
             self.completed_jobs,
             self.skip.isChecked(),
             self.batch_started,
         )
-        max_keep = int(self.config.get("max_restore_tests", 5))
-        report_formats = list(self.config.get("report_formats", ["txt", "html", "pdf"]))
+        settings = getattr(self, "run_settings", self.config.data)
+        max_keep = int(settings.get("max_restore_tests", 5))
+        report_formats = list(settings.get("report_formats", ["txt", "html", "pdf"]))
+        report_errors = False
+        self.phase.setText("Generating final reports")
         report_paths: list[Path] = []
         for summary in summaries:
-            report_path = write_batch_report(
-                self.restore.text().strip(),
-                summary,
-                max_keep=max_keep,
-                report_formats=report_formats,
-            )
+            try:
+                report_path = write_batch_report(
+                    self.restore.text().strip(), summary,
+                    max_keep=max_keep, report_formats=report_formats,
+                )
+            except Exception as exc:
+                report_errors = True
+                self.log.append_line(f"[ERR] {summary.get('Organization')} report failed: {exc}", "error")
+                continue
+            if summary.get("ReportErrors"):
+                report_errors = True
+                for error in summary["ReportErrors"]:
+                    self.log.append_line(f"[ERR] {summary.get('Organization')}: {error}", "error")
             if report_path.is_file():
                 report_paths.append(report_path)
                 status = overall_status(summary)
@@ -607,7 +635,7 @@ class RunPage(QWidget):
                     level,
                 )
 
-        if report_paths and len(report_paths) == len(summaries):
+        if report_paths and len(report_paths) == len(summaries) and not report_errors and not self.stop_requested:
             cleanup_error = cleanup_batch_workspace(self.batch_directory, None)
             if cleanup_error:
                 self.log.append_line(f"[WARN] Could not remove temporary test files: {cleanup_error}", "warning")
@@ -624,31 +652,24 @@ class RunPage(QWidget):
         self.refresh_inventory_button.setEnabled(True)
         self._set_configuration_enabled(True)
         self.progress.setRange(0, 100)
-        all_successful = bool(summaries) and all(summary.get("AllSuccessful") for summary in summaries)
-        any_successful = any(summary.get("AllSuccessful") for summary in summaries)
-        self.progress.setValue(100 if all_successful else 0)
+        all_successful = bool(summaries) and not report_errors and not self.stop_requested and all(summary.get("AllSuccessful") for summary in summaries)
+        any_successful = any(overall_status(summary) in {"SUCCESS", "WARNING"} for summary in summaries)
+        self.progress.setValue(100)
         if self.stop_requested:
             self.phase.setText("Stopped by user")
             self.log.append_line("[WARN] Multi-job run stopped by user.", "warning")
+        elif report_errors:
+            self.phase.setText("Report errors · temporary evidence retained")
         elif all_successful:
             self.phase.setText("All organization reports verified")
         else:
             status = "WARNING" if any_successful else "FAILED"
             self.phase.setText(f"Organization reports: {status}")
-        self.finished_callback(0 if all_successful else 2)
-
-    def _start_error(self, message: str) -> None:
-        duration_seconds = self._elapsed_seconds()
+        self.batch_active = False
         self.elapsed_timer.stop()
-        self.elapsed_label.setText(f"Stopped at {format_duration(duration_seconds)}")
-        self.run_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.refresh_inventory_button.setEnabled(True)
-        self._set_configuration_enabled(True)
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.phase.setText("Could not start")
-        show_error(self, "Could not start PowerShell", message)
+        self.active_jobs.setText("No active jobs")
+        self.elapsed_label.setText(f"Completed in {format_duration(self._elapsed_seconds())}")
+        self.finished_callback(0 if all_successful else 2)
 
     def _elapsed_seconds(self) -> int:
         if self.batch_started_monotonic is None:
@@ -718,8 +739,8 @@ class ReportsPage(QWidget):
         body.addWidget(detail_panel, stretch=1)
         root.addLayout(body, stretch=1)
 
-    def refresh(self) -> None:
-        self.reports = list_reports(str(self.config.get("restore_root")))
+    def refresh(self, reports: list[Report] | None = None) -> None:
+        self.reports = reports if isinstance(reports, list) else list_reports(str(self.config.get("restore_root")))
         self.list.clear()
         for report in self.reports:
             status = overall_status(report.data)
@@ -748,10 +769,17 @@ class ReportsPage(QWidget):
             f"Job: {data.get('JobName', '—')}",
             f"Run: {report.timestamp}",
             f"Duration: {format_duration(data.get('DurationSeconds'))}",
+            f"Report generation: {format_duration(data.get('ReportDurationSeconds'))}",
             f"Backup: {data.get('BackupStatus', '—')}",
             f"Restore point: {data.get('RestorePointDate', '—')}",
             "",
         ]
+        for error in data.get("ReportErrors", []):
+            lines.append(f"REPORT ERROR: {error}")
+        for entry in data.get("JobResults", []):
+            lines.append(f"Job: {entry.get('job')} · exit {entry.get('exit_code')} · {format_duration(entry.get('duration_seconds'))}")
+            for phase, seconds in (entry.get("report") or {}).get("PhaseTimings", {}).items():
+                lines.append(f"  {phase}: {seconds}s")
         for name in ("Exchange", "OneDrive", "SharePoint"):
             item: dict[str, Any] = data.get(name) or {}
             lines.extend([
@@ -865,6 +893,20 @@ class SettingsPage(QWidget):
         skip_help.setObjectName("Muted")
         skip_help.setWordWrap(True)
         output_layout.addWidget(skip_help)
+        performance_form = QFormLayout()
+        self.parallel_orgs = QSpinBox()
+        self.parallel_orgs.setRange(1, 4)
+        self.parallel_orgs.setValue(int(config.get("max_parallel_orgs", 2)))
+        self.parallel_orgs.setToolTip("Independent PowerShell processes. Set to 1 on hosts with limited Explorer capacity.")
+        self.candidate_limit = QSpinBox()
+        self.candidate_limit.setRange(0, 100000)
+        self.candidate_limit.setSingleStep(100)
+        self.candidate_limit.setSpecialValueText("Full enumeration")
+        self.candidate_limit.setValue(int(config.get("sample_candidate_limit", 100)))
+        self.candidate_limit.setToolTip("Random sample from the first eligible items per mailbox/library. 0 scans all items. Bundled engine only.")
+        performance_form.addRow("Concurrent organizations", self.parallel_orgs)
+        performance_form.addRow("Sample candidate window", self.candidate_limit)
+        output_layout.addLayout(performance_form)
 
         selected_formats = {str(item).lower() for item in (config.get("report_formats", ["txt", "html", "pdf"]) or [])}
         formats_label = QLabel("Final report formats")
@@ -949,6 +991,8 @@ class SettingsPage(QWidget):
             "script_path": custom,
             "max_restore_tests": self.max_tests.value(),
             "skip_backups": self.skip_backups.isChecked(),
+            "max_parallel_orgs": self.parallel_orgs.value(),
+            "sample_candidate_limit": self.candidate_limit.value(),
             "report_formats": report_formats,
         })
         self.save_callback()
@@ -958,9 +1002,9 @@ class SettingsPage(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, auto_discover: bool = True, config: ConfigManager | None = None) -> None:
         super().__init__()
-        self.config = ConfigManager()
+        self.config = config if config is not None else ConfigManager()
         self.runner = PowerShellRunner(self)
         self.setWindowTitle("Veeam M365 Restore Tester")
         self.resize(1240, 790)
@@ -1005,7 +1049,7 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(lambda: self.show_page(1))
-        self.run_page = RunPage(self.config, self.runner, self._run_finished)
+        self.run_page = RunPage(self.config, self.runner, self._run_finished, auto_discover=auto_discover)
         self.reports = ReportsPage(self.config)
         self.settings = SettingsPage(self.config, self._settings_saved)
         for page in (self.dashboard, self.run_page, self.reports, self.settings):
@@ -1073,22 +1117,22 @@ class MainWindow(QMainWindow):
             self.run_page.sync_defaults()
 
     def refresh_all(self) -> None:
-        report = latest_report(str(self.config.get("restore_root")))
-        self.dashboard.load_report(report)
-        self.reports.refresh()
+        reports = list_reports(str(self.config.get("restore_root")))
+        self.dashboard.load_reports(reports)
+        self.reports.refresh(reports)
 
     def _run_finished(self, _code: int) -> None:
         self.refresh_all()
-        report = latest_report(str(self.config.get("restore_root")))
-        if report:
-            self.dashboard.load_report(report)
 
     def _settings_saved(self) -> None:
         self.run_page.sync_defaults()
         self.refresh_all()
 
     def closeEvent(self, event) -> None:
-        if self.runner.is_running():
+        if self.run_page.batch_active:
+            if not self.run_page.queue.running:
+                event.ignore()
+                return
             confirmed = ask_confirmation(
                 self,
                 "Test still running",
@@ -1100,5 +1144,14 @@ class MainWindow(QMainWindow):
             if not confirmed:
                 event.ignore()
                 return
-            self.runner.stop()
+            self.run_page.cancel_run()
+            QTimer.singleShot(100, self._close_when_idle)
+            event.ignore()
+            return
         event.accept()
+
+    def _close_when_idle(self):
+        if self.run_page.batch_active:
+            QTimer.singleShot(100, self._close_when_idle)
+        else:
+            self.close()

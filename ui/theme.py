@@ -260,27 +260,38 @@ def stylesheet() -> str:
             border-radius: 2px;
         }}
         /* Lists, logs, and trees: crisp recessed backgrounds and micro-radii */
-        QPlainTextEdit, QTextEdit, QListWidget, QTreeWidget {{
+        QPlainTextEdit, QTextEdit, QListWidget, QTreeWidget, QTableWidget {{
             background: #141414;
             color: {c['text']};
             border: 1px solid {c['border']};
             border-radius: 3px;
             padding: 6px;
         }}
-        QPlainTextEdit:focus, QTextEdit:focus, QListWidget:focus, QTreeWidget:focus {{
+        QPlainTextEdit:focus, QTextEdit:focus, QListWidget:focus, QTreeWidget:focus, QTableWidget:focus {{
             border-color: {c['border_strong']};
         }}
-        QListWidget::item, QTreeWidget::item {{
+        QTableWidget {{
+            gridline-color: {COLORS['border']};
+        }}
+        QHeaderView::section {{
+            background: {COLORS['surface_alt']};
+            color: {COLORS['text_secondary']};
+            border: none;
+            border-bottom: 1px solid {COLORS['border']};
+            padding: 8px;
+            font-weight: 600;
+        }}
+        QListWidget::item, QTreeWidget::item, QTableWidget::item {{
             border-radius: 2px;
             padding: 6px 8px;
             margin: 1px 0px;
             color: {c['text_secondary']};
         }}
-        QListWidget::item:hover, QTreeWidget::item:hover {{
+        QListWidget::item:hover, QTreeWidget::item:hover, QTableWidget::item:hover {{
             background: #252525;
             color: {c['text']};
         }}
-        QListWidget::item:selected, QTreeWidget::item:selected {{
+        QListWidget::item:selected, QTreeWidget::item:selected, QTableWidget::item:selected {{
             background: {c['surface_alt']};
             color: #FFFFFF;
             border: 1px solid #404040;

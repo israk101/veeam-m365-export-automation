@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +33,7 @@ def read_report(path: Path) -> Report | None:
         if not isinstance(data, dict):
             return None
         return Report(path=path, data=data, modified=path.stat().st_mtime)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
 
 
@@ -41,7 +42,20 @@ def list_reports(root: str | Path) -> list[Report]:
     if not base.is_dir():
         return []
     reports: list[Report] = []
-    for path in base.rglob("Report_Summary.json"):
+    # Prune before descending: restored payloads can contain millions of files.
+    for directory, children, files in os.walk(base, followlinks=False):
+        current = Path(directory)
+        depth = len(current.relative_to(base).parts)
+        # A report directory contains evidence below it, not more final reports.
+        # Match staging by its parent, so an organization named "Jobs" or
+        # "Exchange" remains visible at the root.
+        children[:] = [name for name in children
+                       if not (current / name).is_junction()
+                       and not (current.name.startswith("Batch_") and name == "Jobs")
+                       ] if depth < 3 and "Report_Summary.json" not in files else []
+        if "Report_Summary.json" not in files:
+            continue
+        path = current / "Report_Summary.json"
         # Accept reports at depth 2 from root:
         #   <root>/Batch_*/Report_Summary.json          (legacy)
         #   <root>/<OrgName>/RestoreTest_*/Report_Summary.json  (new)

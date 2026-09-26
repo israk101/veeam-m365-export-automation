@@ -50,10 +50,23 @@ param(
     [switch]$SkipBackup,
 
     [ValidateRange(1, 1000)]
-    [int]$MaxSampleAttempts = 25
+    [int]$MaxSampleAttempts = 25,
+
+    # Zero retains full enumeration/randomization for compatibility.
+    [ValidateRange(0, 100000)]
+    [int]$SampleCandidateLimit = 100
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$ProgressPreference = 'SilentlyContinue'
+$runWatch = [Diagnostics.Stopwatch]::StartNew()
+$phaseWatch = [Diagnostics.Stopwatch]::StartNew()
+$phaseTimings = [ordered]@{}
+$candidateSelection = @{}
+if ($SampleCandidateLimit -gt 0) {
+    $candidateSelection.First = [Math]::Max($SampleCandidateLimit, $MaxSampleAttempts)
+}
 
 # ---------------------------------------------------------------------------
 # Funzioni di Log e Formattazione
@@ -86,9 +99,6 @@ function Write-ErrorLog {
 }
 
 $sampleHelperPath = Join-Path $PSScriptRoot 'RestoreSampleHelpers.ps1'
-if (-not (Test-Path -LiteralPath $sampleHelperPath)) {
-    $sampleHelperPath = Join-Path $PSScriptRoot 'scripts\RestoreSampleHelpers.ps1'
-}
 if (-not (Test-Path -LiteralPath $sampleHelperPath)) {
     Write-ErrorLog "Helper di selezione campioni non trovato: RestoreSampleHelpers.ps1"
     exit 1
@@ -153,7 +163,9 @@ try {
 
 try {
     Write-InfoLog "Verifica presenza organizzazione '$OrganizationName'..."
-    $org = Get-VBOOrganization -Name $OrganizationName -ErrorAction SilentlyContinue
+    $orgs = @(Get-VBOOrganization -Name $OrganizationName -ErrorAction Stop | Where-Object { $_.Name -eq $OrganizationName })
+    if ($orgs.Count -ne 1) { throw "Expected one exact organization match for '$OrganizationName'." }
+    $org = $orgs[0]
     if ($null -eq $org) {
         Write-ErrorLog "Organizzazione '$OrganizationName' non trovata su questo server Veeam."
         Disconnect-VBOServer
@@ -162,10 +174,9 @@ try {
     Write-SuccessLog "Organizzazione trovata: $($org.Name) (ID: $($org.Id))"
 
     Write-InfoLog "Verifica presenza Job di backup '$JobName'..."
-    $job = Get-VBOJob -Organization $org -Name $JobName -ErrorAction SilentlyContinue
-    if ($null -eq $job) {
-        $job = Get-VBOJob -Name $JobName -ErrorAction SilentlyContinue
-    }
+    $jobs = @(Get-VBOJob -Organization $org -Name $JobName -ErrorAction Stop | Where-Object { $_.Name -eq $JobName })
+    if ($jobs.Count -ne 1) { throw "Expected one exact job match in organization '$OrganizationName'." }
+    $job = $jobs[0]
     if ($null -eq $job) {
         Write-ErrorLog "Job di backup '$JobName' non trovato."
         Disconnect-VBOServer
@@ -194,35 +205,25 @@ $results = [ordered]@{
     OneDrive         = $null
     SharePoint       = $null
     AllSuccessful    = $false
+    SampleCandidateLimit = $SampleCandidateLimit
+    CleanupErrors    = @()
 }
+$phaseTimings.Preflight = [Math]::Round($phaseWatch.Elapsed.TotalSeconds, 3)
+$phaseWatch.Restart()
 
 try {
     # 2.1 Esecuzione del Job di Backup
     if (-not $SkipBackup) {
         Write-InfoLog "Avvio del Job di Backup '$JobName'..."
-        $startUtc = [DateTime]::UtcNow
-        $startedSession = Start-VBOJob -Job $job
-        Write-InfoLog "Job avviato. In attesa del completamento del backup..."
-
-        $backupCompleted = $false
-        $finalStatus = "Unknown"
-        while (-not $backupCompleted) {
-            Start-Sleep -Seconds 5
-            $session = Get-VBOJobSession -Job $job -Last
-            if ($null -ne $session) {
-                $status = [string]$session.Status
-                $progress = [string]$session.Progress
-                Write-InfoLog "Avanzamento backup: $status (Progresso: $progress)"
-
-                if ($status -in @('Success', 'Warning')) {
-                    $backupCompleted = $true
-                    $finalStatus = $status
-                    break
-                }
-                if ($status -in @('Failed', 'Stopped')) {
-                    throw "Il Job di backup si e concluso con stato: $status"
-                }
-            }
+        # Without -RunAsync, Veeam waits for the job to finish. Read the final
+        # status immediately; do not add a sleep or depend on undocumented IDs.
+        Start-VBOJob -Job $job -ErrorAction Stop | Out-Null
+        $session = Get-VBOJobSession -Job $job -Last -ErrorAction Stop
+        if ($null -eq $session) { throw 'No completed backup session returned for the selected job.' }
+        $finalStatus = [string]$session.Status
+        if ($finalStatus -notin @('Success', 'Warning')) {
+            $results.BackupStatus = $finalStatus
+            throw "Il Job di backup si e concluso con stato: $finalStatus"
         }
 
         $results.BackupStatus = $finalStatus
@@ -233,6 +234,8 @@ try {
     }
 
     # 2.2 Recupero dell'ultimo restore point valido
+    $phaseTimings.Backup = [Math]::Round($phaseWatch.Elapsed.TotalSeconds, 3)
+    $phaseWatch.Restart()
     Write-InfoLog "Recupero dell'ultimo Restore Point per il job '$JobName'..."
     $restorePoint = Get-VBORestorePoint -Job $job -Latest
     if ($null -eq $restorePoint) {
@@ -245,6 +248,8 @@ try {
     }
     $results.RestorePointDate = [string]$pointDate
     Write-SuccessLog "Restore Point individuato: $($restorePoint.Id) (Data: $($results.RestorePointDate))"
+    $phaseTimings.RestorePoint = [Math]::Round($phaseWatch.Elapsed.TotalSeconds, 3)
+    $phaseWatch.Restart()
 
     # -----------------------------------------------------------------------
     # 2.3 RESTORE EXCHANGE -> Esportazione locale di 1 email casuale (.msg)
@@ -265,13 +270,12 @@ try {
             }
         )
 
-        $filteredMailboxes = @()
-        foreach ($mb in $mailboxes) {
+        $filteredMailboxes = @(foreach ($mb in $mailboxes) {
             $mbEmail = if ($null -ne $mb.Email) { [string]$mb.Email } else { [string]$mb.Name }
             if ($mbEmail -notlike "*Discovery*" -and $mbEmail -notlike "*RestoreTest*" -and -not $mb.IsDeleted) {
-                $filteredMailboxes += $mb
+                $mb
             }
-        }
+        })
 
         if ($filteredMailboxes.Count -eq 0) {
             throw "Nessuna casella postale utente idonea trovata nel restore point."
@@ -290,7 +294,7 @@ try {
                 $items = @(Get-VEXItem -Mailbox $mb -ErrorAction Stop | Where-Object {
                     $class = [string]$_.ItemClass
                     $class -like "IPM.Note*" -or $class -eq ""
-                })
+                } | Select-Object @candidateSelection)
             } catch {
                 $exchangeEnumerationErrors++
                 Write-WarnLog "Impossibile enumerare la casella '$($mb.Name)': $($_.Exception.Message). Proseguo con un'altra casella."
@@ -373,9 +377,14 @@ try {
         }
     } finally {
         if ($null -ne $exSession) {
-            try { Stop-VBOExchangeItemRestoreSession -Session $exSession } catch {}
+            try { Stop-VBOExchangeItemRestoreSession -Session $exSession } catch {
+                $results.CleanupErrors += "Exchange: $($_.Exception.Message)"
+                Write-WarnLog $results.CleanupErrors[-1]
+            }
             Write-InfoLog "Sessione Exchange chiusa regolarmente."
         }
+        $phaseTimings.Exchange = [Math]::Round($phaseWatch.Elapsed.TotalSeconds, 3)
+        $phaseWatch.Restart()
     }
 
     # -----------------------------------------------------------------------
@@ -391,13 +400,12 @@ try {
         $odSession = Start-VEODRestoreSession -RestorePoint $restorePoint
 
         $odUsers = @(Get-VEODUser -Session $odSession)
-        $filteredUsers = @()
-        foreach ($u in $odUsers) {
+        $filteredUsers = @(foreach ($u in $odUsers) {
             $uName = if ($null -ne $u.Name) { [string]$u.Name } else { [string]$u.UserName }
             if ($uName -notlike "*RestoreTest*") {
-                $filteredUsers += $u
+                $u
             }
-        }
+        })
 
         if ($filteredUsers.Count -eq 0) {
             throw "Nessun utente OneDrive trovato nel restore point."
@@ -415,7 +423,7 @@ try {
             try {
                 $docs = @(Get-VEODDocument -User $u -Recurse -ErrorAction Stop | Where-Object {
                     Test-RestoreDocumentCandidate -Item $_ -RequireExtension
-                })
+                } | Select-Object @candidateSelection)
             } catch {
                 $oneDriveEnumerationErrors++
                 Write-WarnLog "Impossibile enumerare OneDrive per '$($u.Name)': $($_.Exception.Message). Proseguo con un altro utente."
@@ -497,9 +505,14 @@ try {
         }
     } finally {
         if ($null -ne $odSession) {
-            try { Stop-VEODRestoreSession -Session $odSession } catch {}
+            try { Stop-VEODRestoreSession -Session $odSession } catch {
+                $results.CleanupErrors += "OneDrive: $($_.Exception.Message)"
+                Write-WarnLog $results.CleanupErrors[-1]
+            }
             Write-InfoLog "Sessione OneDrive chiusa regolarmente."
         }
+        $phaseTimings.OneDrive = [Math]::Round($phaseWatch.Elapsed.TotalSeconds, 3)
+        $phaseWatch.Restart()
     }
 
     # -----------------------------------------------------------------------
@@ -554,7 +567,7 @@ try {
                         $docName = [string]$_.Name
                         (Test-RestoreDocumentCandidate -Item $_) -and
                         ($docName -notmatch '\.(aspx|master|html?)$')
-                    })
+                    } | Select-Object @candidateSelection)
                 } catch {
                     $sharePointEnumerationErrors++
                     Write-WarnLog "Impossibile enumerare la libreria '$($lib.Name)' del sito '$($site.Name)': $($_.Exception.Message). Proseguo con un'altra libreria."
@@ -644,15 +657,21 @@ try {
         }
     } finally {
         if ($null -ne $spSession) {
-            try { Stop-VBOSharePointItemRestoreSession -Session $spSession } catch {}
+            try { Stop-VBOSharePointItemRestoreSession -Session $spSession } catch {
+                $results.CleanupErrors += "SharePoint: $($_.Exception.Message)"
+                Write-WarnLog $results.CleanupErrors[-1]
+            }
             Write-InfoLog "Sessione SharePoint chiusa regolarmente."
         }
+        $phaseTimings.SharePoint = [Math]::Round($phaseWatch.Elapsed.TotalSeconds, 3)
+        $phaseWatch.Restart()
     }
 
 } catch {
+    $results.FatalError = $_.Exception.Message
     Write-ErrorLog "Errore critico durante l'esecuzione del processo: $($_.Exception.Message)"
 } finally {
-    Disconnect-VBOServer
+    try { Disconnect-VBOServer } catch { Write-WarnLog "Disconnect failed: $($_.Exception.Message)" }
     Write-InfoLog "Disconnessione dal server Veeam completata."
 }
 
@@ -668,8 +687,10 @@ $backupOk = ($results.BackupStatus -in @("Success", "Warning", "SkippedByUser"))
 
 $hasSuccess = ($exOk -or $odOk -or $spOk)
 $hasFailed = ($exFail -or $odFail -or $spFail)
-$allPassed = ($hasSuccess -and (-not $hasFailed) -and $backupOk)
+$allPassed = ($hasSuccess -and (-not $hasFailed) -and $backupOk -and -not $results.FatalError -and $results.CleanupErrors.Count -eq 0)
 $results.AllSuccessful = $allPassed
+$results.DurationSeconds = [Math]::Round($runWatch.Elapsed.TotalSeconds, 3)
+$results.PhaseTimings = $phaseTimings
 
 $jsonReportPath = Join-Path $runDirectory "Report_Summary.json"
 $results | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonReportPath -Encoding UTF8

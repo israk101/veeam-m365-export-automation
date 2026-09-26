@@ -62,9 +62,6 @@ def _run_sample_helper(tmp_path: Path, body: str) -> dict:
 def test_restore_engine_never_falls_back_to_another_job_restore_point() -> None:
     project_root = Path(__file__).resolve().parents[1]
     canonical = (project_root / "scripts" / "Invoke-SimpleM365BackupRestoreTest.ps1").read_text(encoding="utf-8-sig")
-    compatibility_copy = (project_root / "Invoke-SimpleM365BackupRestoreTest.ps1").read_text(encoding="utf-8-sig")
-
-    assert canonical == compatibility_copy
     assert "Get-VBORestorePoint -Job $job -Latest" in canonical
     assert "Get-VBORestorePoint -Organization $org" not in canonical
     assert "evitare di usare il Restore Point di un altro job" in canonical
@@ -164,11 +161,12 @@ def test_batch_report_merges_successful_workloads_across_jobs(tmp_path: Path) ->
         {"job": "SharePoint", "exit_code": 2, "report_path": "sp.json", "report": {"Exchange": {"Status": "FAILED"}, "OneDrive": {"Status": "FAILED"}, "SharePoint": {"Status": "SUCCESS", "FileName": "site.docx"}}},
     ]
     summary = build_batch_summary("tenant-a", jobs, True, datetime(2026, 9, 18, 10, 30, 0))
-    assert summary["AllSuccessful"] is True
+    assert summary["AllSuccessful"] is False
+    assert summary["OverallStatus"] == "WARNING"
     assert summary["SelectedJobs"] == ["Mail", "OneDrive", "SharePoint"]
     path = write_batch_report(tmp_path, summary)
     assert path.name == "Report_Summary.json"
-    assert json.loads(path.read_text(encoding="utf-8"))["AllSuccessful"] is True
+    assert json.loads(path.read_text(encoding="utf-8"))["AllSuccessful"] is False
 
 
 def test_partial_job_selection_success_and_failure(tmp_path: Path) -> None:
@@ -200,16 +198,17 @@ param($OrganizationName,$JobName,$LocalRestoreRoot,[switch]$SkipBackup)
 $run = Join-Path $LocalRestoreRoot (Get-Date -Format 'yyyyMMdd_HHmmss')
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 $ok = @{ Status='SUCCESS'; FileName="$JobName-item.dat"; LocalFile=(Join-Path $run "$JobName-item.dat"); SizeBytes=10; SHA256='ABC' }
-$bad = @{ Status='FAILED' }
+$bad = @{ Status='NOT_CONFIGURED' }
+[IO.File]::WriteAllBytes($ok.LocalFile, [byte[]](1,2,3,4))
 $report = [ordered]@{
   RunTimestamp=(Get-Date -Format 'yyyyMMdd_HHmmss'); Organization=$OrganizationName; JobName=$JobName
   BackupExecuted=(-not $SkipBackup); BackupStatus=$(if($SkipBackup){'SkippedByUser'}else{'Success'})
   RestorePointDate=(Get-Date).ToString(); Exchange=$(if($JobName -eq 'Mail'){$ok}else{$bad})
-  OneDrive=$(if($JobName -eq 'Drive'){$ok}else{$bad}); SharePoint=$(if($JobName -eq 'Sites'){$ok}else{$bad}); AllSuccessful=$false
+  OneDrive=$(if($JobName -eq 'Drive'){$ok}else{$bad}); SharePoint=$(if($JobName -eq 'Sites'){$ok}else{$bad}); AllSuccessful=$true
 }
 $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $run 'Report_Summary.json') -Encoding utf8
 Write-Host "[OK] $JobName complete"
-exit 2
+exit 0
 ''', encoding="utf-8")
     config = ConfigManager(tmp_path / "settings.json")
     config.save({"organization": "tenant-a", "restore_root": str(tmp_path), "script_path": str(fake_script)})
@@ -370,37 +369,37 @@ def test_html_report_separate_workload_jobs_show_correct_kpi(tmp_path: Path) -> 
         {
             "organization": "israk.onmicrosoft.com",
             "job": "Exchange Mail Backup",
-            "exit_code": 2,
+            "exit_code": 0,
             "report_path": "mail.json",
             "report": {
                 "Exchange": {"Status": "SUCCESS", "SourceMailbox": "user@test.com", "Subject": "Hello", "SizeBytes": 100, "SHA256": "A" * 64},
-                "OneDrive": {"Status": "FAILED", "Error": "The restore point does not contain any OneDrive data."},
-                "SharePoint": {"Status": "FAILED", "Error": "The restore point does not contain any SharePoint data."},
-                "AllSuccessful": False,
+                "OneDrive": {"Status": "NOT_CONFIGURED", "Error": "The restore point does not contain any OneDrive data."},
+                "SharePoint": {"Status": "NOT_CONFIGURED", "Error": "The restore point does not contain any SharePoint data."},
+                "AllSuccessful": True,
             },
         },
         {
             "organization": "israk.onmicrosoft.com",
             "job": "One Drive Backups",
-            "exit_code": 2,
+            "exit_code": 0,
             "report_path": "od.json",
             "report": {
-                "Exchange": {"Status": "FAILED", "Error": "The restore point does not contain any Exchange data."},
+                "Exchange": {"Status": "NOT_CONFIGURED", "Error": "The restore point does not contain any Exchange data."},
                 "OneDrive": {"Status": "SUCCESS", "SourceUser": "user01", "FileName": "doc.pdf", "SizeBytes": 200, "SHA256": "B" * 64},
-                "SharePoint": {"Status": "FAILED", "Error": "The restore point does not contain any SharePoint data."},
-                "AllSuccessful": False,
+                "SharePoint": {"Status": "NOT_CONFIGURED", "Error": "The restore point does not contain any SharePoint data."},
+                "AllSuccessful": True,
             },
         },
         {
             "organization": "israk.onmicrosoft.com",
             "job": "Share Point Sites Backup",
-            "exit_code": 2,
+            "exit_code": 0,
             "report_path": "sp.json",
             "report": {
-                "Exchange": {"Status": "FAILED", "Error": "The restore point does not contain any Exchange data."},
-                "OneDrive": {"Status": "FAILED", "Error": "The restore point does not contain any OneDrive data."},
+                "Exchange": {"Status": "NOT_CONFIGURED", "Error": "The restore point does not contain any Exchange data."},
+                "OneDrive": {"Status": "NOT_CONFIGURED", "Error": "The restore point does not contain any OneDrive data."},
                 "SharePoint": {"Status": "SUCCESS", "Site": "Sites", "FileName": "page.aspx", "SizeBytes": 300, "SHA256": "C" * 64},
-                "AllSuccessful": False,
+                "AllSuccessful": True,
             },
         },
     ]

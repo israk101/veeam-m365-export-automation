@@ -10,6 +10,9 @@ from core.paths import resource_path
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == '--self-test':
+        from core.diagnostics import run_self_test
+        return run_self_test(sys.argv[2])
     app = QApplication(sys.argv)
     app.setApplicationName("Veeam M365 Restore Tester")
     app.setOrganizationName("LabLogos")

@@ -1,36 +1,28 @@
+param([string]$PythonPath = '', [switch]$Incremental)
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = $PSScriptRoot
 Set-Location -LiteralPath $ProjectRoot
-
-python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --onedir `
-    --windowed `
-    --uac-admin `
-    --name VeeamM365RestoreTester `
-    --icon "assets\app-icon.ico" `
-    --version-file "version_info.txt" `
-    --add-data "scripts\Invoke-SimpleM365BackupRestoreTest.ps1;scripts" `
-    --add-data "scripts\Get-VeeamM365Inventory.ps1;scripts" `
-    --add-data "scripts\RestoreSampleHelpers.ps1;scripts" `
-    --add-data "assets\app-icon.ico;assets" `
-    --add-data "assets\app-icon.svg;assets" `
-    --add-data "assets\logos_logo.png;assets" `
-    --add-data "assets\logos_footer.png;assets" `
-    --add-data "assets\logos_icon.png;assets" `
-    --add-data "assets\workload_email.png;assets" `
-    --add-data "assets\workload_onedrive.png;assets" `
-    --add-data "assets\workload_sharepoint.png;assets" `
-    --add-data "assets\nav_dashboard.svg;assets" `
-    --add-data "assets\nav_run.svg;assets" `
-    --add-data "assets\nav_reports.svg;assets" `
-    --add-data "assets\nav_settings.svg;assets" `
-    --add-data "assets\status_verified.svg;assets" `
-    --add-data "assets\status_attention.svg;assets" `
-    --add-data "assets\status_idle.svg;assets" `
-    --add-data "assets\checkbox_checked.svg;assets" `
-    --add-data "assets\checkbox_dash.svg;assets" `
-    main.py
-
-Write-Host "Built: $ProjectRoot\dist\VeeamM365RestoreTester\VeeamM365RestoreTester.exe"
+if (-not $PythonPath) {
+    $localPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
+    $PythonPath = if (Test-Path -LiteralPath $localPython) { $localPython } else { 'python' }
+}
+$buildArgs = @('-m', 'PyInstaller', '--noconfirm', '--onedir', '--windowed', '--uac-admin',
+    '--name', 'VeeamM365RestoreTester', '--distpath', 'portable', '--workpath', 'build',
+    '--specpath', 'build', '--icon', "$ProjectRoot\assets\app-icon.ico",
+    '--version-file', "$ProjectRoot\version_info.txt")
+if (-not $Incremental) { $buildArgs += '--clean' }
+# QWidget UI and WebEngineWidgets do not use QML Python bindings/import trees.
+# PyInstaller still resolves DLL dependencies needed by Qt WebEngine itself.
+foreach ($module in @('PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickWidgets')) {
+    $buildArgs += @('--exclude-module', $module)
+}
+foreach ($folder in @('assets', 'scripts')) {
+    foreach ($file in Get-ChildItem -LiteralPath "$ProjectRoot\$folder" -File) {
+        $buildArgs += @('--add-data', "$($file.FullName);$folder")
+    }
+}
+$buildArgs += "$ProjectRoot\main.py"
+& $PythonPath @buildArgs
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: $LASTEXITCODE" }
+& $PythonPath "$ProjectRoot\tools\package_portable.py"
+if ($LASTEXITCODE -ne 0) { throw "Portable packaging failed: $LASTEXITCODE" }

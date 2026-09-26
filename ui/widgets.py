@@ -98,9 +98,9 @@ class StatusCard(QFrame):
 
     def update_data(self, data: dict[str, Any] | None) -> None:
         data = data or {}
-        status = str(data.get("Status", "NOT RUN")).upper()
+        status = str(data.get("Status", "NOT RUN")).upper().replace("_", " ")
         success = status == "SUCCESS"
-        is_not_run = status in ("NOT RUN", "N/A", "")
+        is_not_run = status in ("NOT RUN", "N/A", "NOT CONFIGURED", "")
 
         if success:
             color = COLORS["green"]
@@ -122,8 +122,8 @@ class StatusCard(QFrame):
             f"border-radius: 2px; padding: 3px 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;"
         )
 
-        source = data.get("SourceMailbox") or data.get("SourceUser") or data.get("Site") or "No result available"
-        filename = data.get("Subject") or data.get("FileName") or "Run a restore test to populate this card."
+        source = data.get("SourceMailbox") or data.get("SourceUser") or data.get("Site") or ("Workload not configured" if status == "NOT CONFIGURED" else "No result available")
+        filename = data.get("Subject") or data.get("FileName") or data.get("Error") or ("No protected content in this job." if status == "NOT CONFIGURED" else "Run a restore test to populate this card.")
         size = human_size(data.get("SizeBytes"))
         self.primary.setText(str(source))
         self.detail.setText(f"{filename}  ·  {size}" if data else str(filename))

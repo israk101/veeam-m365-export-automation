@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from time import monotonic
 
 
 WORKLOADS = ("Exchange", "OneDrive", "SharePoint")
@@ -64,6 +65,13 @@ def client_report_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Remove internal-only telemetry before rendering client-facing reports."""
     client_summary = deepcopy(summary)
     client_summary.pop("DurationSeconds", None)
+    client_summary.pop("ReportDurationSeconds", None)
+    for entry in client_summary.get("JobResults", []):
+        entry.pop("duration_seconds", None)
+        report = entry.get("report")
+        if isinstance(report, dict):
+            report.pop("DurationSeconds", None)
+            report.pop("PhaseTimings", None)
     return client_summary
 
 
@@ -72,44 +80,41 @@ def copy_workload_artifacts(directory: Path, summary: dict[str, Any]) -> None:
     import shutil
 
     for workload, folder_name in WORKLOAD_RESTORE_FOLDERS.items():
-        candidates: list[str] = []
+        candidates: list[dict[str, Any]] = []
         item = summary.get(workload)
         if isinstance(item, dict) and item.get("LocalFile"):
-            candidates.append(str(item["LocalFile"]))
+            candidates.append(item)
         for entry in summary.get("JobResults", []):
             rep = entry.get("report")
             if isinstance(rep, dict):
                 wl_data = rep.get(workload)
                 if isinstance(wl_data, dict) and wl_data.get("LocalFile"):
-                    candidates.append(str(wl_data["LocalFile"]))
+                    candidates.append(wl_data)
 
-        copied_path: Path | None = None
-        for cand in candidates:
-            src = Path(cand)
-            if src.is_file():
-                dest_dir = directory / folder_name
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                dest_file = dest_dir / src.name
-                if not dest_file.exists() or dest_file.stat().st_size != src.stat().st_size:
-                    shutil.copy2(src, dest_file)
-                copied_path = dest_file
-                if src.parent.is_dir():
-                    for sibling in src.parent.iterdir():
-                        if sibling.is_file():
-                            target = dest_dir / sibling.name
-                            if not target.exists():
-                                shutil.copy2(sibling, target)
-                break
-
-        if copied_path:
-            new_path_str = str(copied_path)
-            if isinstance(summary.get(workload), dict):
-                summary[workload]["LocalFile"] = new_path_str
-            for entry in summary.get("JobResults", []):
-                rep = entry.get("report")
-                if isinstance(rep, dict) and isinstance(rep.get(workload), dict):
-                    if rep[workload].get("LocalFile"):
-                        rep[workload]["LocalFile"] = new_path_str
+        copied: dict[Path, Path] = {}
+        for item in candidates:
+            src = Path(item["LocalFile"]).resolve()
+            if src in copied:
+                item["LocalFile"] = str(copied[src])
+                continue
+            if not src.is_file():
+                raise FileNotFoundError(f"Missing {workload} evidence: {src}")
+            dest_dir = directory / folder_name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            # Preserve each job's evidence; identical filenames need distinct paths.
+            for sibling in (src, *(p for p in src.parent.iterdir() if p.is_file() and p != src)):
+                if sibling in copied:
+                    continue
+                target = dest_dir / sibling.name
+                suffix = 1
+                while target.exists() and target.resolve() != sibling:
+                    target = dest_dir / f"{sibling.stem}_{suffix}{sibling.suffix}"
+                    suffix += 1
+                if target.resolve() != sibling:
+                    shutil.copy2(sibling, target)
+                copied[sibling] = target
+                copied[target.resolve()] = target
+            item["LocalFile"] = str(copied[src])
 
 
 def build_batch_summary(
@@ -120,6 +125,7 @@ def build_batch_summary(
     duration_seconds: int | float | None = None,
 ) -> dict[str, Any]:
     now = timestamp or datetime.now()
+    jobs = deepcopy(jobs)
     org_groups: dict[str, list[dict[str, Any]]] = {}
     for entry in jobs:
         org = entry.get("organization", organization)
@@ -161,8 +167,8 @@ def build_batch_summary(
         code = entry.get("exit_code")
         rep = entry.get("report")
         if isinstance(rep, dict):
-            if rep.get("AllSuccessful"):
-                return True
+            if code != 0 or rep.get("FatalError") or rep.get("CleanupErrors") or entry.get("cancelled"):
+                return False
             statuses = [
                 str(rep.get(wl, {}).get("Status", "")).upper()
                 for wl in WORKLOADS
@@ -172,9 +178,7 @@ def build_batch_summary(
             has_failure = any(s in ("FAILED", "ERROR") for s in statuses)
             if has_success and not has_failure:
                 return True
-            if has_success and code in (0, 2):
-                return True
-        return code == 0
+        return False
 
     any_workload_success = any(
         str(summary.get(workload, {}).get("Status", "")).upper() == "SUCCESS"
@@ -224,7 +228,8 @@ def write_batch_report(
     max_keep: int = 5,
     report_formats: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> Path:
-    selected_formats = {str(item).lower() for item in (report_formats or ("txt", "html", "pdf"))}
+    report_started = monotonic()
+    selected_formats = {str(item).lower() for item in (report_formats if report_formats is not None else ("txt", "html", "pdf"))}
     base = Path(root).expanduser()
 
     # Determine the primary organization name for directory placement
@@ -249,10 +254,29 @@ def write_batch_report(
         directory = base / f"Batch_{timestamp}"
         org_dir = None
 
-    directory.mkdir(parents=True, exist_ok=True)
-    copy_workload_artifacts(directory, summary)
+    # Reserve a new session directory, preserving the existing timestamp layout.
+    stamp = datetime.strptime(timestamp, "%Y%m%d_%H%M%S")
+    while True:
+        try:
+            directory.mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            stamp += timedelta(seconds=1)
+            directory = directory.with_name(f"{'RestoreTest' if org_dir else 'Batch'}_{stamp:%Y%m%d_%H%M%S}")
+    try:
+        copy_workload_artifacts(directory, summary)
+    except Exception:
+        # This invocation created the directory; original evidence is still in
+        # staging. Do not leave a partial session consuming retention slots.
+        import shutil
+        if directory.resolve().parent == (org_dir or base).resolve():
+            shutil.rmtree(directory)
+        raise
     json_path = directory / "Report_Summary.json"
-    json_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Preserve mandatory evidence even if an optional renderer fails unexpectedly.
+    temporary = json_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(json_path)
     status = overall_status(summary)
     lines = [
         "VEEAM M365 MULTI-JOB RESTORE TEST",
@@ -276,29 +300,41 @@ def write_batch_report(
         org_prefix = f"[{entry.get('organization')}] " if entry.get("organization") else ""
         rep = entry.get("report") if isinstance(entry.get("report"), dict) else {}
         passed = [wl for wl in WORKLOADS if isinstance(rep.get(wl), dict) and str(rep.get(wl, {}).get("Status", "")).upper() == "SUCCESS"]
-        if rep.get("AllSuccessful") or entry.get("exit_code") == 0 or passed:
-            job_status = "SUCCESS"
-        else:
-            job_status = "FAILED"
+        job_status = overall_status(rep) if rep else "FAILED"
+        if entry.get("exit_code") != 0 and job_status == "SUCCESS":
+            job_status = "WARNING"
         detail = f": {', '.join(passed)}" if passed else ""
         lines.append(f"- {org_prefix}{entry.get('job')}: {job_status}{detail} · exit {entry.get('exit_code')} ({entry.get('report_path') or 'no report'})")
+    errors: list[str] = []
     if "txt" in selected_formats:
-        (directory / "Report_Summary.txt").write_text("\n".join(lines), encoding="utf-8")
-    rendered_summary = client_report_summary(summary)
-    if "html" in selected_formats:
         try:
-            from core.html_report import write_html_report
-            write_html_report(directory, rendered_summary)
-        except Exception:
-            pass
+            (directory / "Report_Summary.txt").write_text("\n".join(lines), encoding="utf-8")
+        except Exception as exc:
+            errors.append(f"TXT: {exc}")
+    rendered_summary = client_report_summary(summary)
+    html_content = None
+    if selected_formats & {"html", "pdf"}:
+        try:
+            from core.html_report import render_html_report
+            html_content = render_html_report(rendered_summary)
+            if "html" in selected_formats:
+                (directory / "Report_Summary.html").write_text(html_content, encoding="utf-8")
+        except Exception as exc:
+            errors.append(f"HTML: {exc}")
 
     # Generate PDF version of the report
     if "pdf" in selected_formats:
         try:
             from core.pdf_report import write_pdf_report
-            write_pdf_report(directory, rendered_summary)
-        except Exception:
-            pass
+            write_pdf_report(directory, rendered_summary, html_content=html_content)
+        except Exception as exc:
+            errors.append(f"PDF: {exc}")
+
+    summary["ReportErrors"] = errors
+    summary["ReportDurationSeconds"] = round(monotonic() - report_started, 3)
+    temporary = json_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(json_path)
 
     # Enforce retention policy on the org directory
     if org_dir and org_dir.is_dir():

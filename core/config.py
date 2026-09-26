@@ -12,6 +12,8 @@ DEFAULTS: dict[str, Any] = {
     "script_path": "",
     "max_restore_tests": 5,
     "skip_backups": True,
+    "max_parallel_orgs": 2,
+    "sample_candidate_limit": 100,
     "report_formats": ["txt", "html", "pdf"],
 }
 

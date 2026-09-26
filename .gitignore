@@ -31,6 +31,8 @@ venv/
 /build/
 /dist/
 /scratch/
+/portable/VeeamM365RestoreTester/
+!/portable/*-portable.zip
 
 # IDE & Editor configurations
 .vscode/

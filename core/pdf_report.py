@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-def write_pdf_report(root: Path | str, summary: dict[str, Any]) -> Path:
+def write_pdf_report(root: Path | str, summary: dict[str, Any], *, html_content: str | None = None) -> Path:
     """Render the HTML summary report to a PDF using Chromium via QWebEngine.
 
     Parameters
@@ -46,7 +46,8 @@ def write_pdf_report(root: Path | str, summary: dict[str, Any]) -> Path:
         app_created = True
 
     try:
-        html_content = render_html_report(summary)
+        if html_content is None:
+            html_content = render_html_report(summary)
 
         # A4 page with zero extra margins so CSS @page controls margins
         page_layout = QPageLayout(
@@ -56,7 +57,6 @@ def write_pdf_report(root: Path | str, summary: dict[str, Any]) -> Path:
         )
 
         view = QWebEngineView()
-        view.setHtml(html_content, QUrl("file:///"))
 
         loop = QEventLoop()
         pdf_data: list[bytes] = []
@@ -84,6 +84,8 @@ def write_pdf_report(root: Path | str, summary: dict[str, Any]) -> Path:
         timeout.setSingleShot(True)
         timeout.timeout.connect(loop.quit)
         timeout.start(30000)
+        # Connect before loading; a cached/small document may finish immediately.
+        view.setHtml(html_content, QUrl("file:///"))
 
         loop.exec()
         timeout.stop()
@@ -93,6 +95,8 @@ def write_pdf_report(root: Path | str, summary: dict[str, Any]) -> Path:
 
         view.close()
         view.deleteLater()
+        if error_occurred[0] or not pdf_data or not pdf_data[0].startswith(b"%PDF-"):
+            raise RuntimeError("PDF rendering failed or exceeded 30 seconds")
 
     finally:
         if app_created:

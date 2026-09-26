@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,11 +13,11 @@ from core.paths import resource_path
 from core.reports import human_size
 
 
+@lru_cache(maxsize=1)
 def _get_logo_data_uri() -> str:
     """Read logos_logo.png and return base64 data URI, or empty string if not found."""
     for candidate in (
         resource_path("assets/logos_logo.png"),
-        Path(r"C:\Users\Administrator\Downloads\drive-download-20260918T072946Z-1-001\Logo_Logos_trasparent (1).png"),
     ):
         if candidate.is_file():
             try:
@@ -28,11 +29,11 @@ def _get_logo_data_uri() -> str:
     return ""
 
 
+@lru_cache(maxsize=1)
 def _get_footer_logo_data_uri() -> str:
     """Read logos_footer.png and return base64 data URI for the report footer."""
     for candidate in (
         resource_path("assets/logos_footer.png"),
-        Path(r"C:\Users\Administrator\Desktop\logos footter.png"),
         resource_path("assets/logos_logo.png"),
     ):
         if candidate.is_file():
@@ -45,15 +46,16 @@ def _get_footer_logo_data_uri() -> str:
     return ""
 
 
+@lru_cache(maxsize=3)
 def _get_workload_logo_data_uri(workload_key: str) -> str:
     """Read workload-specific icon (email, onedrive, sharepoint) and return base64 URI."""
     mapping = {
-        "email": ["assets/workload_email.png", r"C:\Users\Administrator\Desktop\email logo for html report.png"],
-        "onedrive": ["assets/workload_onedrive.png", r"C:\Users\Administrator\Desktop\one drive cloude logo.png"],
-        "sharepoint": ["assets/workload_sharepoint.png", r"C:\Users\Administrator\Desktop\share point logo.png"],
+        "email": ["assets/workload_email.png"],
+        "onedrive": ["assets/workload_onedrive.png"],
+        "sharepoint": ["assets/workload_sharepoint.png"],
     }
     for item in mapping.get(workload_key.lower(), []):
-        p = resource_path(item) if not item.startswith("C:") else Path(item)
+        p = resource_path(item)
         if p.is_file():
             try:
                 raw = p.read_bytes()
@@ -78,15 +80,14 @@ def _job_successful_workloads(j: dict[str, Any]) -> list[str]:
 
 
 def _job_has_workload_success(j: dict[str, Any]) -> bool:
-    """Return True if the job finished with code 0, has AllSuccessful, or has at least one successful workload."""
-    if j.get("exit_code") == 0:
-        return True
+    """Only complete, non-failing evidence counts as a successful job."""
     rep = j.get("report")
-    if not rep or not isinstance(rep, dict):
+    if not isinstance(rep, dict) or j.get("exit_code") != 0 or rep.get("FatalError") or rep.get("CleanupErrors") or j.get("cancelled"):
         return False
-    if rep.get("AllSuccessful"):
-        return True
-    return len(_job_successful_workloads(j)) > 0
+    return bool(_job_successful_workloads(j)) and not any(
+        normalize_status((rep.get(wl) or {}).get("Status")) in {"FAILED", "ERROR"}
+        for wl in ("Exchange", "OneDrive", "SharePoint")
+    )
 
 
 def render_html_report(summary: dict[str, Any]) -> str:
@@ -159,7 +160,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
         j_pass = _job_has_workload_success(j)
 
         if j_pass:
-            if rep.get("AllSuccessful") or len(passed_wls) == 3:
+            if len(passed_wls) == 3:
                 j_status = "SUCCESS"
                 j_badge = "badge-success"
             elif passed_wls:
@@ -169,7 +170,7 @@ def render_html_report(summary: dict[str, Any]) -> str:
                 j_status = "SUCCESS"
                 j_badge = "badge-success"
         else:
-            j_status = "FAILED"
+            j_status = "WARNING" if passed_wls else "FAILED"
             j_badge = "badge-failed"
 
         rp = str(rep.get("RestorePointDate") or "—")

@@ -1,0 +1,23 @@
+Veeam M365 Restore Tester bundles these third-party runtimes:
+
+Python 3.12 — Python Software Foundation License.
+https://docs.python.org/3/license.html
+
+PySide6, Shiboken6 and Qt 6.9.2 — LGPL v3 / GPL v3 / commercial licensing,
+depending on component. The application uses dynamically linked Qt libraries.
+https://doc.qt.io/qtforpython-6/licenses.html
+https://www.qt.io/licensing/open-source-lgpl-obligations
+Corresponding upstream source: https://download.qt.io/official_releases/qt/6.9/6.9.2/
+https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.9.2-src/
+
+Qt WebEngine embeds Chromium and third-party libraries with their own notices.
+https://doc.qt.io/qt-6/qtwebengine-licensing.html
+
+PyInstaller bootloader — GPL with the bootloader distribution exception.
+https://pyinstaller.org/en/stable/license.html
+
+Microsoft Visual C++ runtime — Microsoft redistributable runtime terms.
+https://visualstudio.microsoft.com/license-terms/
+
+Veeam Backup for Microsoft 365 and Microsoft 365 are external prerequisites;
+their software, credentials and backups are not included in this package.

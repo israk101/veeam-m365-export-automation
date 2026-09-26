@@ -9,8 +9,6 @@ from pathlib import Path
 
 # Matches directories created by write_batch_report: RestoreTest_YYYYMMDD_HHMMSS
 _TEST_DIR_PATTERN = re.compile(r"^RestoreTest_\d{8}_\d{6}$")
-# Also match legacy Batch_ directories for backward compat
-_BATCH_DIR_PATTERN = re.compile(r"^Batch_\d{8}_\d{6}$")
 
 
 def _test_dirs(org_dir: Path) -> list[Path]:
@@ -19,7 +17,7 @@ def _test_dirs(org_dir: Path) -> list[Path]:
         return []
     dirs = [
         d for d in org_dir.iterdir()
-        if d.is_dir() and _TEST_DIR_PATTERN.match(d.name)
+        if d.is_dir() and not d.is_symlink() and not d.is_junction() and _TEST_DIR_PATTERN.match(d.name)
     ]
     return sorted(dirs, key=lambda d: d.name)
 
