@@ -2,7 +2,9 @@
 
 Applicazione Windows per verificare i restore point di Veeam Backup for Microsoft 365 con esportazioni **locali e fuori posto**. Versione **1.3.1**.
 
-[Scarica il portable ZIP](https://media.githubusercontent.com/media/israk101/veeam-m365-export-automation/main/portable/VeeamM365RestoreTester-1.3.1-portable.zip) · [Manuale tecnico](docs/index.html) · [Riferimento funzioni](docs/reference.html) · [SHA-256](portable/SHA256SUMS.txt)
+[Scarica l'ultima versione da GitHub Releases](https://github.com/israk101/veeam-m365-export-automation/releases/latest) · [Manuale tecnico](docs/index.html) · [Riferimento funzioni](docs/reference.html) · [SHA-256 della release](https://github.com/israk101/veeam-m365-export-automation/releases/latest/download/SHA256SUMS.txt)
+
+**Per ottenere il programma pronto all'uso, apri [Releases](https://github.com/israk101/veeam-m365-export-automation/releases/latest) e scarica dagli Assets il file `VeeamM365RestoreTester-<versione>-portable.zip`.** Non serve clonare la repository o installare Python. Gli archivi automatici **Source code (zip/tar.gz)** contengono i sorgenti, non il pacchetto portable pronto da eseguire.
 
 ![Dashboard 1.3.1 con risultati per organizzazione](docs/images/dashboard.png)
 
@@ -10,7 +12,7 @@ Applicazione Windows per verificare i restore point di Veeam Backup for Microsof
 
 ## Avvio
 
-1. Scarica lo ZIP da `portable/` ed estrai **tutta** la cartella `VeeamM365RestoreTester`.
+1. Apri l'[ultima release](https://github.com/israk101/veeam-m365-export-automation/releases/latest), scarica dagli **Assets** lo ZIP `VeeamM365RestoreTester-<versione>-portable.zip` e il relativo `SHA256SUMS.txt`. Verifica il checksum ed estrai **tutta** la cartella `VeeamM365RestoreTester`.
 2. Mantieni l'EXE e `_internal` insieme. Esegui `VeeamM365RestoreTester.exe` sul server Veeam e approva l'elevazione Windows.
 3. In **Run test**, seleziona organizzazioni e job. Con **Don't run backup jobs** attivo vengono usati i restore point esistenti; disattivalo per eseguire prima nuovi backup.
 4. Avvia il test e consulta Dashboard/Reports. Ogni organizzazione riceve una cartella finale indipendente.
@@ -71,7 +73,7 @@ py -3.12 -m venv .venv
 .\build.ps1
 ```
 
-La build produce `portable\VeeamM365RestoreTester\` e lo ZIP versionato. La cartella estratta è ignorata da Git; lo ZIP è gestito da **Git LFS**. Dopo un clone esegui `git lfs pull`; lo ZIP sorgenti automatico di GitHub può contenere un puntatore LFS: usa il link di download diretto sopra.
+La build produce `portable\VeeamM365RestoreTester\` e lo ZIP versionato. La cartella estratta è ignorata da Git; lo ZIP nella repository è gestito da **Git LFS**. Per lo sviluppo, dopo un clone esegui `git lfs pull` se ti serve anche quel file. Per utilizzare il programma compilato, scarica invece il portable dagli **Assets di [GitHub Releases](https://github.com/israk101/veeam-m365-export-automation/releases/latest)**: non richiede Git né Git LFS.
 
 Controllo offline del pacchetto, senza Veeam, con destinazione nuova:
 
